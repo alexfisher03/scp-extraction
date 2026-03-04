@@ -1,1 +1,3 @@
-print("Hello world, from server!")
+require(script.Parent:WaitForChild("Remotes"))
+require(script.Parent:WaitForChild("SpawnService"))
+require(script.Parent:WaitForChild("GunServer"))
