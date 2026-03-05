@@ -55,6 +55,8 @@ fireEvent.OnServerEvent:Connect(function(player: Player, origin: Vector3, direct
 
 	local result = workspace:Raycast(origin, direction * MAX_DISTANCE, params)
 	if not result then return end
+    
+    warn("HIT:", result.Instance:GetFullName(), "CanQuery:", result.Instance.CanQuery)
 
 	local hit = result.Instance
 	local hitModel = hit:FindFirstAncestorOfClass("Model")

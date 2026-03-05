@@ -25,7 +25,7 @@ local function getSpawnPoints(): {BasePart}
 end
 
 local function chooseSpawn(points: {BasePart}): BasePart
-    return points[math.random(1, #points)]
+    return points[5]
 end
 
 local function spawnCharacterAt(player: Player, character: Model)
