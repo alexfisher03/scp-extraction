@@ -216,10 +216,42 @@ local function listCard(title: string, lines: {string}, position: UDim2)
 	})
 end
 
+local function useTimedCheckMagText(snapshot: any)
+	local text, setText = React.useState("")
+	local seqRef = React.useRef(0)
+
+	React.useEffect(function()
+		if not snapshot then return end
+
+		local seq = snapshot.lastCheckMagSeq
+		local magText = snapshot.lastCheckMag
+
+		if typeof(seq) ~= "number" then return end
+		if seq == seqRef.current then return end
+		seqRef.current = seq
+
+		if typeof(magText) == "string" and magText ~= "" then
+			local display = "Check: " .. magText
+			setText(display)
+
+			local thisSeq = seq
+			task.delay(2.0, function()
+				if seqRef.current == thisSeq then
+					setText("")
+				end
+			end)
+		end
+	end, { snapshot })
+
+	return text
+end
+
+
 local function HudApp()
 	local health, maxHealth = useHumanoidHealth()
 	local snapshot = useSnapshot()
 	local inventoryVisible = useInventoryVisible()
+	local timedCheckMagText = useTimedCheckMagText(snapshot)
 
 	local hpText = string.format("HP %d/%d", math.floor(health + 0.5), math.floor(maxHealth + 0.5))
 
@@ -230,6 +262,8 @@ local function HudApp()
 	local reloadStatusText = ""
 	if snapshot and snapshot.isReloading then
 		reloadStatusText = "Reloading..."
+	elseif timedCheckMagText ~= "" then
+		reloadStatusText = timedCheckMagText
 	end
 
 	if snapshot then
@@ -310,14 +344,20 @@ local function HudApp()
 		rootChildren.ReloadStatus = React.createElement("TextLabel", {
 			AnchorPoint = Vector2.new(0, 1),
 			Position = UDim2.new(0, 16, 1, -80),
-			Size = UDim2.fromOffset(240, 22),
+			Size = UDim2.fromOffset(260, 22),
 			BackgroundTransparency = 1,
-			Text = reloadStatusText,
+			Text = if snapshot and snapshot.isReloading
+				then "Reloading..."
+				elseif timedCheckMagText ~= ""
+				then timedCheckMagText
+				else "",
 			Font = Enum.Font.GothamBold,
 			TextSize = 13,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextColor3 = Color3.fromRGB(255, 210, 120),
 		})
+
+
 
 		rootChildren.Hotbar = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 1),

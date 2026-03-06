@@ -48,6 +48,7 @@ type InventoryState = {
     isReloading: boolean,
     lastCheckMag: string?,
     cooldowns: {[string]: number},
+    lastCheckMagSeq: number,
 }
 
 local states: {[number]: InventoryState} = {}
@@ -100,6 +101,7 @@ local function toSnapshot(state: InventoryState)
         itemsById = cloneItems(state.itemsById),
         isReloading = state.isReloading,
         lastCheckMag = state.lastCheckMag,
+        lastCheckMagSeq = state.lastCheckMagSeq,
     }
 end
 
@@ -220,6 +222,7 @@ local function getOrCreateState(player: Player): InventoryState
         isReloading = false,
         lastCheckMag = nil,
         cooldowns = {},
+        lastCheckMagSeq = 0,
     }
 
     states[player.UserId] = state
@@ -242,15 +245,23 @@ end
 
 local function magReadText(ammo: number, capacity: number): string
     if capacity <= 0 then return "Unknown" end
+
     local ratio = ammo / capacity
-    if ratio >= 0.85 then
+    if ratio >= 1 then
         return "Full"
-    elseif ratio >= 0.4 then
+    elseif ratio > 0.85 then
+        return "Almost Full"
+    elseif ratio > 0.5 then
+        return "More than Half"
+    elseif ratio == 0.5 then
         return "Half"
+    elseif ratio > 0.15 then
+        return "Less than Half"
     elseif ratio > 0 then
-        return "Low"
+        return "Almost Empty"
+    else
+        return "Empty"
     end
-    return "Empty"
 end
 
 local function isCompatibleMag(gun: Item, mag: Item): boolean
@@ -441,6 +452,7 @@ local function handleCheckMag(player: Player, state: InventoryState)
         local ammo = mag.ammo or 0
         local cap = mag.capacity or 0
         current.lastCheckMag = magReadText(ammo, cap)
+        current.lastCheckMagSeq += 1
         sendSnapshot(player, current)
     end)
 end

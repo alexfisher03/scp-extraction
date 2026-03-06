@@ -98,6 +98,18 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		return
 	end
 
+	if input.KeyCode == Enum.KeyCode.R then
+		if UserInputService:GetFocusedTextBox() then return end
+		sendAction({ kind = "Reload" })
+		return
+	end
+
+	if input.KeyCode == Enum.KeyCode.C then
+		if UserInputService:GetFocusedTextBox() then return end
+		sendAction({ kind = "CheckMag" })
+		return
+	end
+
 	if processed then return end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -113,19 +125,5 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	if slot then
 		sendAction({ kind = "EquipSlot", slot = slot })
 		return
-	end
-
-	if input.KeyCode == Enum.KeyCode.R then
-		local altDown = UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) or UserInputService:IsKeyDown(Enum.KeyCode.RightAlt)
-		if altDown then
-			sendAction({ kind = "CheckMag" })
-		else
-			sendAction({ kind = "Reload" })
-		end
-		return
-	end
-
-	if input.KeyCode == Enum.KeyCode.C then
-		sendAction({ kind = "CheckMag" })
 	end
 end)
