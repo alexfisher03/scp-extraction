@@ -70,15 +70,93 @@ local function useHumanoidHealth()
 	return health, maxHealth
 end
 
-local function Slot(props: { index: number })
+local function useEquippedSlot()
+	local equippedSlot, setEquippedSlot = React.useState(0)
+
+	React.useEffect(function()
+		local alive = true
+	    local charConn: RBXScriptConnection? = nil
+		local toolAddedConn: RBXScriptConnection? = nil
+		local toolRemovedConn: RBXScriptConnection? = nil
+
+		local function disconnectAll()
+			if charConn then charConn:Disconnect() end
+			if toolAddedConn then toolAddedConn:Disconnect() end
+			if toolRemovedConn then toolRemovedConn:Disconnect() end
+			charConn = nil
+			toolAddedConn = nil
+			toolRemovedConn = nil
+		end
+
+		local function computeSlotFromCharacter(char: Model?): number
+			if not char then return 0 end 
+			local tool = char:FindFirstChildOfClass("Tool")
+			if tool and tool.Name == "Rifle" then
+				return 1
+			end
+			return 0
+		end
+
+		local function bindCharacter(char: Model)
+			if toolAddedConn then toolAddedConn:Disconnect() end
+			if toolRemovedConn then toolRemovedConn:Disconnect() end
+			toolAddedConn = nil
+			toolRemovedConn = nil
+
+			if alive then
+				setEquippedSlot(computeSlotFromCharacter(char))
+			end
+			
+			toolAddedConn = char.ChildAdded:Connect(function(child)
+				if not alive then return end
+				if child:IsA("Tool") then
+					setEquippedSlot(computeSlotFromCharacter(char))
+				end
+			end)
+
+			toolRemovedConn = char.ChildRemoved:Connect(function(child)
+				if not alive then return end
+				if child:IsA("Tool") then
+					setEquippedSlot(computeSlotFromCharacter(char))
+				end
+			end)
+		end
+
+		if player.Character then
+			bindCharacter(player.Character)
+		else
+			setEquippedSlot(0)
+		end
+
+		charConn = player.CharacterAdded:Connect(function(char)
+			if alive then
+				bindCharacter(char)
+			end
+		end)
+
+		return function()
+			alive = false
+			disconnectAll()
+		end
+	end, {})
+	return equippedSlot
+end
+
+local function Slot(props: { index: number, selected: boolean })
+	local strokeTransparency = if props.selected then 0 else 0.35
+	local strokeColor = if props.selected then Color3.fromRGB(255, 220, 120) else Color3.new(1, 1, 1)
+	local textTransparency = if props.selected then 0.05 else 0.55
+	local bgTransparency = if props.selected then 0.45 else 0.75
+
 	return React.createElement("Frame", {
 		Size = UDim2.fromOffset(48, 48),
-		BackgroundTransparency = 0.75,
+		BackgroundTransparency = bgTransparency,
 		BorderSizePixel = 0,
 	}, {
 		Stroke = React.createElement("UIStroke", {
-			Thickness = 1,
-			Transparency = 0.35,
+			Thickness = if props.selected then 2 else 1,
+			Transparency = strokeTransparency,
+			Color = strokeColor,
 		}),
 		Corner = React.createElement("UICorner", {
 			CornerRadius = UDim.new(0, 6),
@@ -88,14 +166,16 @@ local function Slot(props: { index: number })
 			BackgroundTransparency = 1,
 			Text = tostring(props.index),
 			TextScaled = true,
-			TextTransparency = 0.55,
+			TextTransparency = textTransparency,
 			Font = Enum.Font.GothamMedium,
+			TextColor3 = Color3.new(1, 1, 1),
 		}),
 	})
 end
 
 local function HudApp()
 	local health, maxHealth = useHumanoidHealth()
+	local equippedSlot = useEquippedSlot()
 	local hpText = string.format("HP %d/%d", math.floor(health + 0.5), math.floor(maxHealth + 0.5))
 
 	local children = {
@@ -108,7 +188,10 @@ local function HudApp()
 	}
 
 	for i = 1, 5 do
-		children["Slot" .. i] = React.createElement(Slot, { index = i })
+		children["Slot" .. i] = React.createElement(Slot, {
+			index = i,
+			selected = (i == equippedSlot),
+		})
 	end
 
 	return React.createElement("ScreenGui", {
@@ -118,13 +201,14 @@ local function HudApp()
 		Health = React.createElement("TextLabel", {
 			AnchorPoint = Vector2.new(0, 1),
 			Position = UDim2.new(0, 16, 1, -16),
-			Size = UDim2.fromOffset(180, 26),
+			Size = UDim2.fromOffset(240, 48),
 			BackgroundTransparency = 0.75,
 			BorderSizePixel = 0,
 			Text = hpText,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			Font = Enum.Font.GothamMedium,
 			TextSize = 14,
+			TextColor3 = Color3.new(1, 1, 1),
 		}, {
 			Stroke = React.createElement("UIStroke", {
 				Thickness = 1,
