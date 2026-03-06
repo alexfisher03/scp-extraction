@@ -22,9 +22,7 @@ local function ensureRemote(name: string): RemoteEvent
     return created
 end
 
-ensureRemote(Net.GunFireEventName)
-ensureRemote(Net.GunReloadEventName)
-ensureRemote(Net.GunCheckMagEventName)
-ensureRemote(Net.GunStateEventName)
+ensureRemote(Net.InventoryActionEventName)
+ensureRemote(Net.InventorySnapshotEventName)
 
 return folder

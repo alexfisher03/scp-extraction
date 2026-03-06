@@ -2,17 +2,15 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local Packages = ReplicatedStorage:WaitForChild("Packages")
 local React = require(Packages:WaitForChild("React"))
 local ReactRoblox = require(Packages:WaitForChild("ReactRoblox"))
 
-local player = Players.LocalPlayer
+local InventoryStore = require(script.Parent.Parent.state.InventoryStore)
 
-type Connections = {
-	healthConn: RBXScriptConnection?,
-	diedConn: RBXScriptConnection?,
-}
+local player = Players.LocalPlayer
 
 local function useHumanoidHealth()
 	local health, setHealth = React.useState(100)
@@ -20,30 +18,33 @@ local function useHumanoidHealth()
 
 	React.useEffect(function()
 		local alive = true
-		local conns: Connections = { healthConn = nil, diedConn = nil }
+		local healthConn: RBXScriptConnection? = nil
+		local diedConn: RBXScriptConnection? = nil
+		local charConn: RBXScriptConnection? = nil
 
-		local function disconnectAll()
-			if conns.healthConn then conns.healthConn:Disconnect() end
-			if conns.diedConn then conns.diedConn:Disconnect() end
-			conns.healthConn = nil
-			conns.diedConn = nil
+		local function disconnectHumanoid()
+			if healthConn then healthConn:Disconnect() end
+			if diedConn then diedConn:Disconnect() end
+			healthConn = nil
+			diedConn = nil
 		end
 
 		local function bindCharacter(char: Model)
-			disconnectAll()
+			disconnectHumanoid()
 
-			local hum = char:WaitForChild("Humanoid") :: Humanoid
+			local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid")
+			local humanoid = hum :: Humanoid
 
-			setMaxHealth(hum.MaxHealth)
-			setHealth(hum.Health)
+			setHealth(humanoid.Health)
+			setMaxHealth(humanoid.MaxHealth)
 
-			conns.healthConn = hum.HealthChanged:Connect(function(hp)
+			healthConn = humanoid.HealthChanged:Connect(function(hp)
 				if alive then
 					setHealth(hp)
 				end
 			end)
 
-			conns.diedConn = hum.Died:Connect(function()
+			diedConn = humanoid.Died:Connect(function()
 				if alive then
 					setHealth(0)
 				end
@@ -54,80 +55,6 @@ local function useHumanoidHealth()
 			bindCharacter(player.Character)
 		end
 
-		local charConn = player.CharacterAdded:Connect(function(char)
-			if alive then
-				bindCharacter(char)
-			end
-		end)
-
-		return function()
-			alive = false
-			charConn:Disconnect()
-			disconnectAll()
-		end
-	end, {})
-
-	return health, maxHealth
-end
-
-local function useEquippedSlot()
-	local equippedSlot, setEquippedSlot = React.useState(0)
-
-	React.useEffect(function()
-		local alive = true
-	    local charConn: RBXScriptConnection? = nil
-		local toolAddedConn: RBXScriptConnection? = nil
-		local toolRemovedConn: RBXScriptConnection? = nil
-
-		local function disconnectAll()
-			if charConn then charConn:Disconnect() end
-			if toolAddedConn then toolAddedConn:Disconnect() end
-			if toolRemovedConn then toolRemovedConn:Disconnect() end
-			charConn = nil
-			toolAddedConn = nil
-			toolRemovedConn = nil
-		end
-
-		local function computeSlotFromCharacter(char: Model?): number
-			if not char then return 0 end 
-			local tool = char:FindFirstChildOfClass("Tool")
-			if tool and tool.Name == "Rifle" then
-				return 1
-			end
-			return 0
-		end
-
-		local function bindCharacter(char: Model)
-			if toolAddedConn then toolAddedConn:Disconnect() end
-			if toolRemovedConn then toolRemovedConn:Disconnect() end
-			toolAddedConn = nil
-			toolRemovedConn = nil
-
-			if alive then
-				setEquippedSlot(computeSlotFromCharacter(char))
-			end
-			
-			toolAddedConn = char.ChildAdded:Connect(function(child)
-				if not alive then return end
-				if child:IsA("Tool") then
-					setEquippedSlot(computeSlotFromCharacter(char))
-				end
-			end)
-
-			toolRemovedConn = char.ChildRemoved:Connect(function(child)
-				if not alive then return end
-				if child:IsA("Tool") then
-					setEquippedSlot(computeSlotFromCharacter(char))
-				end
-			end)
-		end
-
-		if player.Character then
-			bindCharacter(player.Character)
-		else
-			setEquippedSlot(0)
-		end
-
 		charConn = player.CharacterAdded:Connect(function(char)
 			if alive then
 				bindCharacter(char)
@@ -136,191 +63,326 @@ local function useEquippedSlot()
 
 		return function()
 			alive = false
-			disconnectAll()
+			if charConn then charConn:Disconnect() end
+			disconnectHumanoid()
 		end
 	end, {})
-	return equippedSlot
+
+	return health, maxHealth
 end
 
-local function useAmmoState()
-	local ammoInMag, setAmmoInMag = React.useState(0)
-	local magSize, setMagSize = React.useState(0)
-	local magRead, setMagRead = React.useState("")
-	local isReloading, setIsReloading = React.useState(false)
+local function useSnapshot()
+	local snapshot, setSnapshot = React.useState(InventoryStore.getSnapshot())
 
 	React.useEffect(function()
-		local alive = true
-		local conns: {RBXScriptConnection} = {}
-
-		local function syncFromAttributes()
-			if not alive then return end
-
-			local ammo = player:GetAttribute("AmmoInMag")
-			local size = player:GetAttribute("MagSize")
-			local read = player:GetAttribute("MagRead")
-			local reload = player:GetAttribute("IsReloading")
-
-			setAmmoInMag(if typeof(ammo) == "number" then ammo else 0)
-			setMagSize(if typeof(size) == "number" then size else 0)
-			setMagRead(if typeof(read) == "string" then read else "")
-			setIsReloading(if typeof(reload) == "boolean" then reload else false)
-		end
-
-		table.insert(conns, player:GetAttributeChangedSignal("AmmoInMag"):Connect(syncFromAttributes))
-		table.insert(conns, player:GetAttributeChangedSignal("MagSize"):Connect(syncFromAttributes))
-		table.insert(conns, player:GetAttributeChangedSignal("MagRead"):Connect(syncFromAttributes))
-		table.insert(conns, player:GetAttributeChangedSignal("IsReloading"):Connect(syncFromAttributes))
-
-		syncFromAttributes()
-
+		local conn = InventoryStore.changedSignal():Connect(function(nextSnapshot)
+			setSnapshot(nextSnapshot)
+		end)
 		return function()
-			alive = false
-			for _, c in ipairs(conns) do
-				c:Disconnect()
-			end
+			conn:Disconnect()
 		end
 	end, {})
 
-	return ammoInMag, magSize, magRead, isReloading
+	return snapshot
 end
 
-local function Slot(props: { index: number, selected: boolean })
-	local strokeTransparency = if props.selected then 0 else 0.35
-	local strokeColor = if props.selected then Color3.fromRGB(255, 220, 120) else Color3.new(1, 1, 1)
-	local textTransparency = if props.selected then 0.05 else 0.55
-	local bgTransparency = if props.selected then 0.45 else 0.75
+local function useInventoryVisible()
+	local visible, setVisible = React.useState(false)
 
+	React.useEffect(function()
+		local function sync()
+			local v = player:GetAttribute("InventoryVisible")
+			setVisible(typeof(v) == "boolean" and v or false)
+		end
+
+		local conn = player:GetAttributeChangedSignal("InventoryVisible"):Connect(sync)
+		sync()
+
+		return function()
+			conn:Disconnect()
+		end
+	end, {})
+
+	return visible
+end
+
+
+local function itemLabel(snapshot: any, itemId: string?): string
+	if not snapshot or not itemId then
+		return "[Empty]"
+	end
+
+	local item = snapshot.itemsById[itemId]
+	if not item then
+		return "[Missing]"
+	end
+
+	if item.category == "mag" then
+		return string.format("%s (%d/%d)", item.templateId, item.ammo or 0, item.capacity or 0)
+	end
+
+	return item.templateId
+end
+
+local function hotbarSlot(index: number, text: string, selected: boolean)
 	return React.createElement("Frame", {
-		Size = UDim2.fromOffset(48, 48),
-		BackgroundTransparency = bgTransparency,
+		Size = UDim2.fromOffset(56, 56),
+		BackgroundTransparency = if selected then 0.35 else 0.7,
+		BackgroundColor3 = if selected then Color3.fromRGB(120, 95, 40) else Color3.fromRGB(20, 20, 20),
 		BorderSizePixel = 0,
 	}, {
+		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
 		Stroke = React.createElement("UIStroke", {
-			Thickness = if props.selected then 2 else 1,
-			Transparency = strokeTransparency,
-			Color = strokeColor,
+			Thickness = if selected then 2 else 1,
+			Transparency = if selected then 0 else 0.25,
+			Color = Color3.fromRGB(255, 225, 130),
 		}),
-		Corner = React.createElement("UICorner", {
-			CornerRadius = UDim.new(0, 6),
-		}),
-		Label = React.createElement("TextLabel", {
-			Size = UDim2.fromScale(1, 1),
+		Key = React.createElement("TextLabel", {
+			AnchorPoint = Vector2.new(0, 0),
+			Position = UDim2.fromOffset(6, 4),
+			Size = UDim2.fromOffset(16, 14),
 			BackgroundTransparency = 1,
-			Text = tostring(props.index),
-			TextScaled = true,
-			TextTransparency = textTransparency,
-			Font = Enum.Font.GothamMedium,
+			Text = tostring(index),
+			Font = Enum.Font.GothamBold,
+			TextSize = 12,
+			TextColor3 = Color3.fromRGB(220, 220, 220),
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}),
+		Name = React.createElement("TextLabel", {
+			AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.new(0.5, 0, 1, -6),
+			Size = UDim2.new(1, -8, 0, 28),
+			BackgroundTransparency = 1,
+			Text = text,
+			TextWrapped = true,
+			Font = Enum.Font.Gotham,
+			TextSize = 11,
 			TextColor3 = Color3.new(1, 1, 1),
 		}),
 	})
 end
 
-local function HudApp()
-	local health, maxHealth = useHumanoidHealth()
-	local equippedSlot = useEquippedSlot()
-	local ammoInMag, magSize, magRead, isReloading = useAmmoState()
-
-	local ammoText = if magSize > 0
-		then string.format("AMMO %d/%d", ammoInMag, magSize)
-		else "AMMO -/-"
-
-	local magReadText = if isReloading
-		then "Reloading..."
-		elseif magRead ~= ""
-		then "Check: " .. magRead
-		else ""
-	local hpText = string.format("HP %d/%d", math.floor(health + 0.5), math.floor(maxHealth + 0.5))
-
-	local children = {
+local function listCard(title: string, lines: {string}, position: UDim2)
+	local children: {[string]: any} = {
 		Layout = React.createElement("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal,
-			HorizontalAlignment = Enum.HorizontalAlignment.Center,
-			VerticalAlignment = Enum.VerticalAlignment.Center,
-			Padding = UDim.new(0, 6),
+			FillDirection = Enum.FillDirection.Vertical,
+			Padding = UDim.new(0, 4),
+			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
 	}
 
-	for i = 1, 5 do
-		children["Slot" .. i] = React.createElement(Slot, {
-			index = i,
-			selected = (i == equippedSlot),
+	for i, line in ipairs(lines) do
+		children["Line" .. i] = React.createElement("TextLabel", {
+			LayoutOrder = i,
+			Size = UDim2.new(1, 0, 0, 20),
+			BackgroundTransparency = 1,
+			Text = line,
+			Font = Enum.Font.Code,
+			TextSize = 14,
+			TextColor3 = Color3.new(1, 1, 1),
+			TextXAlignment = Enum.TextXAlignment.Left,
+		})
+	end
+
+	return React.createElement("Frame", {
+		AnchorPoint = Vector2.new(0, 0),
+		Position = position,
+		Size = UDim2.fromOffset(340, 220),
+		BackgroundTransparency = 0.2,
+		BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+		BorderSizePixel = 0,
+	}, {
+		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+		Stroke = React.createElement("UIStroke", {
+			Thickness = 1,
+			Transparency = 0.2,
+			Color = Color3.fromRGB(75, 75, 75),
+		}),
+		Title = React.createElement("TextLabel", {
+			Position = UDim2.fromOffset(10, 8),
+			Size = UDim2.new(1, -20, 0, 22),
+			BackgroundTransparency = 1,
+			Text = title,
+			Font = Enum.Font.GothamBold,
+			TextSize = 15,
+			TextColor3 = Color3.fromRGB(255, 225, 130),
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}),
+		List = React.createElement("Frame", {
+			Position = UDim2.fromOffset(10, 34),
+			Size = UDim2.new(1, -20, 1, -44),
+			BackgroundTransparency = 1,
+		}, children),
+	})
+end
+
+local function HudApp()
+	local health, maxHealth = useHumanoidHealth()
+	local snapshot = useSnapshot()
+	local inventoryVisible = useInventoryVisible()
+
+	local hpText = string.format("HP %d/%d", math.floor(health + 0.5), math.floor(maxHealth + 0.5))
+
+	local hotbarItemIds: {string?} = { nil, nil, nil, nil, nil }
+	local equippedIndex = 0
+	local ammoText = "AMMO -/-"
+
+	local reloadStatusText = ""
+	if snapshot and snapshot.isReloading then
+		reloadStatusText = "Reloading..."
+	end
+
+	if snapshot then
+		for i = 1, 5 do
+			hotbarItemIds[i] = snapshot.hotbarItemIds and snapshot.hotbarItemIds[i] or nil
+		end
+
+		local slot = snapshot.equippedSlot
+		if slot == "PrimaryA" then equippedIndex = 1 end
+		if slot == "PrimaryB" then equippedIndex = 2 end
+		if slot == "Pistol" then equippedIndex = 3 end
+		if slot == "Melee" then equippedIndex = 4 end
+
+		local equippedItemId = slot and snapshot.weaponSlots and snapshot.weaponSlots[slot] or nil
+		local equippedItem = equippedItemId and snapshot.itemsById[equippedItemId] or nil
+		if equippedItem and (equippedItem.category == "gun" or equippedItem.category == "pistol") then
+			local magId = equippedItem.attachedMagId
+			local mag = magId and snapshot.itemsById[magId] or nil
+			if mag then
+				ammoText = string.format("AMMO %d/%d", mag.ammo or 0, mag.capacity or 0)
+			else
+				ammoText = "AMMO 0/0"
+			end
+		end
+	end
+
+	local rootChildren: {[string]: any} = {}
+
+	if not inventoryVisible then
+		local barChildren: {[string]: any} = {
+			Layout = React.createElement("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				Padding = UDim.new(0, 8),
+			}),
+		}
+
+		for i = 1, 5 do
+			barChildren["Slot" .. i] = hotbarSlot(
+				i,
+				itemLabel(snapshot, hotbarItemIds[i]),
+				equippedIndex == i
+			)
+		end
+
+		rootChildren.Health = React.createElement("TextLabel", {
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(0, 16, 1, -16),
+			Size = UDim2.fromOffset(240, 36),
+			BackgroundTransparency = 0.45,
+			BackgroundColor3 = Color3.fromRGB(18, 18, 18),
+			BorderSizePixel = 0,
+			Text = hpText,
+			Font = Enum.Font.GothamBold,
+			TextSize = 14,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextColor3 = Color3.new(1, 1, 1),
+		}, {
+			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
+			Padding = React.createElement("UIPadding", {
+				PaddingLeft = UDim.new(0, 8),
+				PaddingRight = UDim.new(0, 8),
+			}),
+		})
+
+		rootChildren.Ammo = React.createElement("TextLabel", {
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(0, 16, 1, -56),
+			Size = UDim2.fromOffset(240, 32),
+			BackgroundTransparency = 1,
+			Text = ammoText,
+			Font = Enum.Font.Gotham,
+			TextSize = 13,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextColor3 = Color3.fromRGB(220, 220, 220),
+		})
+
+		rootChildren.ReloadStatus = React.createElement("TextLabel", {
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(0, 16, 1, -80),
+			Size = UDim2.fromOffset(240, 22),
+			BackgroundTransparency = 1,
+			Text = reloadStatusText,
+			Font = Enum.Font.GothamBold,
+			TextSize = 13,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextColor3 = Color3.fromRGB(255, 210, 120),
+		})
+
+		rootChildren.Hotbar = React.createElement("Frame", {
+			AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.new(0.5, 0, 1, -16),
+			Size = UDim2.fromOffset(5 * 56 + 4 * 8, 56),
+			BackgroundTransparency = 1,
+		}, barChildren)
+	else
+		local weaponRows = {
+			string.format("PrimaryA: %s", snapshot and itemLabel(snapshot, snapshot.weaponSlots.PrimaryA) or "[Empty]"),
+			string.format("PrimaryB: %s", snapshot and itemLabel(snapshot, snapshot.weaponSlots.PrimaryB) or "[Empty]"),
+			string.format("Pistol:   %s", snapshot and itemLabel(snapshot, snapshot.weaponSlots.Pistol) or "[Empty]"),
+			string.format("Melee:    %s", snapshot and itemLabel(snapshot, snapshot.weaponSlots.Melee) or "[Empty]"),
+			string.format("Equipped: %s", snapshot and (snapshot.equippedSlot or "None") or "None"),
+		}
+
+		local rigRows: {string} = {}
+		local backpackRows: {string} = {}
+
+		if snapshot then
+			for i, itemId in ipairs(snapshot.rig.itemIds) do
+				rigRows[i] = itemLabel(snapshot, itemId)
+			end
+			for i, itemId in ipairs(snapshot.backpack.itemIds) do
+				backpackRows[i] = itemLabel(snapshot, itemId)
+			end
+		end
+
+		if #rigRows == 0 then rigRows[1] = "[Empty]" end
+		if #backpackRows == 0 then backpackRows[1] = "[Empty]" end
+
+		rootChildren.InventoryRoot = React.createElement("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(720, 520),
+			BackgroundTransparency = 0.12,
+			BackgroundColor3 = Color3.fromRGB(12, 12, 12),
+			BorderSizePixel = 0,
+		}, {
+			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
+			Stroke = React.createElement("UIStroke", {
+				Thickness = 1,
+				Transparency = 0.25,
+				Color = Color3.fromRGB(80, 80, 80),
+			}),
+			Title = React.createElement("TextLabel", {
+				Position = UDim2.fromOffset(16, 10),
+				Size = UDim2.new(1, -32, 0, 24),
+				BackgroundTransparency = 1,
+				Text = "Inventory (Tab to Close)",
+				Font = Enum.Font.GothamBold,
+				TextSize = 16,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextColor3 = Color3.fromRGB(255, 225, 130),
+			}),
+			Weapons = listCard("Weapon Slots", weaponRows, UDim2.fromOffset(16, 44)),
+			Rig = listCard("Rig", rigRows, UDim2.fromOffset(364, 44)),
+			Backpack = listCard("Backpack", backpackRows, UDim2.fromOffset(16, 282)),
 		})
 	end
 
 	return React.createElement("ScreenGui", {
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
-	}, {
-		Health = React.createElement("TextLabel", {
-			AnchorPoint = Vector2.new(0, 1),
-			Position = UDim2.new(0, 16, 1, -16),
-			Size = UDim2.fromOffset(240, 48),
-			BackgroundTransparency = 0.75,
-			BorderSizePixel = 0,
-			Text = hpText,
-			TextXAlignment = Enum.TextXAlignment.Left,
-			Font = Enum.Font.GothamMedium,
-			TextSize = 14,
-			TextColor3 = Color3.new(1, 1, 1),
-		}, {
-			Stroke = React.createElement("UIStroke", {
-				Thickness = 1,
-				Transparency = 0.35,
-			}),
-			Corner = React.createElement("UICorner", {
-				CornerRadius = UDim.new(0, 6),
-			}),
-			Padding = React.createElement("UIPadding", {
-				PaddingLeft = UDim.new(0, 8),
-				PaddingRight = UDim.new(0, 8),
-			}),
-		}),
-
-		Ammo = React.createElement("TextLabel", {
-		AnchorPoint = Vector2.new(0, 1),
-		Position = UDim2.new(0, 16, 1, -68),
-		Size = UDim2.fromOffset(240, 44),
-		BackgroundTransparency = 0.75,
-		BorderSizePixel = 0,
-		Text = ammoText,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Font = Enum.Font.GothamMedium,
-		TextSize = 14,
-		TextColor3 = Color3.new(1, 1, 1),
-	}, {
-		Stroke = React.createElement("UIStroke", {
-			Thickness = 1,
-			Transparency = 0.35,
-		}),
-		Corner = React.createElement("UICorner", {
-			CornerRadius = UDim.new(0, 6),
-		}),
-		Padding = React.createElement("UIPadding", {
-			PaddingLeft = UDim.new(0, 8),
-			PaddingRight = UDim.new(0, 8),
-		}),
-	}),
-
-	MagRead = React.createElement("TextLabel", {
-		AnchorPoint = Vector2.new(0, 1),
-		Position = UDim2.new(0, 16, 1, -116),
-		Size = UDim2.fromOffset(240, 36),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Text = magReadText,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Font = Enum.Font.GothamMedium,
-		TextSize = 13,
-		TextColor3 = Color3.fromRGB(220, 220, 220),
-	}),
-
-		Hotbar = React.createElement("Frame", {
-			AnchorPoint = Vector2.new(0.5, 1),
-			Position = UDim2.new(0.5, 0, 1, -16),
-			Size = UDim2.fromOffset(5 * 48 + 4 * 6, 48),
-			BackgroundTransparency = 1,
-		}, children),
-	})
+	}, rootChildren)
 end
 
 local function mount()

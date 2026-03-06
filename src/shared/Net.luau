@@ -1,9 +1,7 @@
 --!strict
 
 return {
-    RemotesFolderName = "_remotes",
-    GunFireEventName = "GunFire",
-    GunReloadEventName = "GunReload",
-    GunCheckMagEventName = "GunCheckMag",
-    GunStateEventName = "GunState", 
+	RemotesFolderName = "_remotes",
+	InventoryActionEventName = "InventoryAction",  -- client to server
+	InventorySnapshotEventName = "InventorySnapshot", -- server to client
 }
