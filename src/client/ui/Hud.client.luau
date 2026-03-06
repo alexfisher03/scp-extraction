@@ -142,6 +142,48 @@ local function useEquippedSlot()
 	return equippedSlot
 end
 
+local function useAmmoState()
+	local ammoInMag, setAmmoInMag = React.useState(0)
+	local magSize, setMagSize = React.useState(0)
+	local magRead, setMagRead = React.useState("")
+	local isReloading, setIsReloading = React.useState(false)
+
+	React.useEffect(function()
+		local alive = true
+		local conns: {RBXScriptConnection} = {}
+
+		local function syncFromAttributes()
+			if not alive then return end
+
+			local ammo = player:GetAttribute("AmmoInMag")
+			local size = player:GetAttribute("MagSize")
+			local read = player:GetAttribute("MagRead")
+			local reload = player:GetAttribute("IsReloading")
+
+			setAmmoInMag(if typeof(ammo) == "number" then ammo else 0)
+			setMagSize(if typeof(size) == "number" then size else 0)
+			setMagRead(if typeof(read) == "string" then read else "")
+			setIsReloading(if typeof(reload) == "boolean" then reload else false)
+		end
+
+		table.insert(conns, player:GetAttributeChangedSignal("AmmoInMag"):Connect(syncFromAttributes))
+		table.insert(conns, player:GetAttributeChangedSignal("MagSize"):Connect(syncFromAttributes))
+		table.insert(conns, player:GetAttributeChangedSignal("MagRead"):Connect(syncFromAttributes))
+		table.insert(conns, player:GetAttributeChangedSignal("IsReloading"):Connect(syncFromAttributes))
+
+		syncFromAttributes()
+
+		return function()
+			alive = false
+			for _, c in ipairs(conns) do
+				c:Disconnect()
+			end
+		end
+	end, {})
+
+	return ammoInMag, magSize, magRead, isReloading
+end
+
 local function Slot(props: { index: number, selected: boolean })
 	local strokeTransparency = if props.selected then 0 else 0.35
 	local strokeColor = if props.selected then Color3.fromRGB(255, 220, 120) else Color3.new(1, 1, 1)
@@ -176,6 +218,17 @@ end
 local function HudApp()
 	local health, maxHealth = useHumanoidHealth()
 	local equippedSlot = useEquippedSlot()
+	local ammoInMag, magSize, magRead, isReloading = useAmmoState()
+
+	local ammoText = if magSize > 0
+		then string.format("AMMO %d/%d", ammoInMag, magSize)
+		else "AMMO -/-"
+
+	local magReadText = if isReloading
+		then "Reloading..."
+		elseif magRead ~= ""
+		then "Check: " .. magRead
+		else ""
 	local hpText = string.format("HP %d/%d", math.floor(health + 0.5), math.floor(maxHealth + 0.5))
 
 	local children = {
@@ -222,6 +275,44 @@ local function HudApp()
 				PaddingRight = UDim.new(0, 8),
 			}),
 		}),
+
+		Ammo = React.createElement("TextLabel", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 16, 1, -68),
+		Size = UDim2.fromOffset(240, 44),
+		BackgroundTransparency = 0.75,
+		BorderSizePixel = 0,
+		Text = ammoText,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 14,
+		TextColor3 = Color3.new(1, 1, 1),
+	}, {
+		Stroke = React.createElement("UIStroke", {
+			Thickness = 1,
+			Transparency = 0.35,
+		}),
+		Corner = React.createElement("UICorner", {
+			CornerRadius = UDim.new(0, 6),
+		}),
+		Padding = React.createElement("UIPadding", {
+			PaddingLeft = UDim.new(0, 8),
+			PaddingRight = UDim.new(0, 8),
+		}),
+	}),
+
+	MagRead = React.createElement("TextLabel", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 16, 1, -116),
+		Size = UDim2.fromOffset(240, 36),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Text = magReadText,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 13,
+		TextColor3 = Color3.fromRGB(220, 220, 220),
+	}),
 
 		Hotbar = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 1),
