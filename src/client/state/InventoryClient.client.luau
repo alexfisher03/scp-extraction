@@ -19,7 +19,8 @@ local controls: any = nil
 local CLOSED_CAMERA_MODE = Enum.CameraMode.LockFirstPerson
 local OPEN_CAMERA_MODE = Enum.CameraMode.Classic
 local inventoryCameraConn: RBXScriptConnection? = nil
-local inventoryCameraOffset: CFrame? = nil
+local inventoryCameraStart: CFrame? = nil
+local inventoryAnchorStartPosition: Vector3? = nil
 
 local function getControls()
 	if controls then
@@ -46,7 +47,8 @@ local function stopInventoryCameraFollow()
 		inventoryCameraConn:Disconnect()
 		inventoryCameraConn = nil
 	end
-	inventoryCameraOffset = nil
+	inventoryCameraStart = nil
+	inventoryAnchorStartPosition = nil
 end
 
 local function startInventoryCameraFollow()
@@ -57,16 +59,19 @@ local function startInventoryCameraFollow()
 		return
 	end
 
-	inventoryCameraOffset = anchor.CFrame:ToObjectSpace(camera.CFrame)
+	inventoryCameraStart = camera.CFrame
+	inventoryAnchorStartPosition = anchor.Position
 
 	inventoryCameraConn = RunService.RenderStepped:Connect(function()
 		local currentAnchor = getCameraAnchor()
-		if not currentAnchor or not camera or not inventoryCameraOffset then
+		if not currentAnchor or not camera or not inventoryCameraStart or not inventoryAnchorStartPosition then
 			return
 		end
 
-		camera.CFrame = currentAnchor.CFrame * inventoryCameraOffset
-		camera.Focus = currentAnchor.CFrame
+		local positionDelta = currentAnchor.Position - inventoryAnchorStartPosition
+		local targetCameraCFrame = inventoryCameraStart + positionDelta
+		camera.CFrame = targetCameraCFrame
+		camera.Focus = targetCameraCFrame + targetCameraCFrame.LookVector
 	end)
 end
 

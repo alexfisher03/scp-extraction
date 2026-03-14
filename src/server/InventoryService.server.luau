@@ -2,12 +2,15 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage.Shared.Net)
+local LootDefinitions = require(ReplicatedStorage.Shared.LootDefinitions)
 
 local remotes = ReplicatedStorage:WaitForChild(Net.RemotesFolderName)
 local actionEvent = remotes:WaitForChild(Net.InventoryActionEventName) :: RemoteEvent
 local snapshotEvent = remotes:WaitForChild(Net.InventorySnapshotEventName) :: RemoteEvent
+local pickupEvent = remotes:WaitForChild(Net.LootPickupRequestEventName) :: RemoteEvent
 
 local MAX_DISTANCE = 300
 local DAMAGE = 30
@@ -16,8 +19,10 @@ local FIRE_COOLDOWN = 0.15
 local EQUIP_COOLDOWN = 0.05
 local RELOAD_COOLDOWN = 0.2
 local CHECK_MAG_COOLDOWN = 0.6
+local PICKUP_COOLDOWN = 0.15
 local RELOAD_SECONDS = 2.2
 local CHECK_MAG_SECONDS = 1.0
+local PICKUP_DISTANCE = 15
 
 type SlotName = "PrimaryA" | "PrimaryB" | "Pistol" | "Melee"
 
@@ -28,6 +33,8 @@ type Item = {
     stack: number?,
     ammo: number?,
     capacity: number?,
+    usesRemaining: number?,
+    usesMax: number?,
     attachedMagId: string?,
     acceptedMagTemplateIds: {string}?,
 }
@@ -49,9 +56,11 @@ type InventoryState = {
     lastCheckMag: string?,
     cooldowns: {[string]: number},
     lastCheckMagSeq: number,
+    nextItemId: number,
 }
 
 local states: {[number]: InventoryState} = {}
+local lootedSet: {[Instance]: boolean} = {}
 
 local function cloneArray<T>(arr: {T}): {T}
     local out = table.create(#arr)
@@ -140,6 +149,16 @@ local function removeFromContainer(container: Container, itemId: string): boolea
     return false
 end
 
+local function findItemIndex(container: Container, itemId: string): number?
+	for i, id in ipairs(container.itemIds) do
+		if id == itemId then
+			return i
+		end
+	end
+
+	return nil
+end
+
 local function containerHasItem(container: Container, itemId: string): boolean
     for _, id in ipairs(container.itemIds) do
         if id == itemId then
@@ -153,10 +172,28 @@ local function canAddToContainer(container: Container): boolean
     return #container.itemIds < container.capacity
 end
 
-local function findItemContainer(state: InventoryState, itemId: string): string?
-    if containerHasItem(state.rig, itemId) then return "rig" end
-    if containerHasItem(state.backpack, itemId) then return "backpack" end
-    return nil
+local function getContainerByName(state: InventoryState, containerName: string): Container?
+	if containerName == "rig" then
+		return state.rig
+	end
+
+	if containerName == "backpack" then
+		return state.backpack
+	end
+
+	return nil
+end
+
+local function containerAcceptsItem(containerName: string, item: Item): boolean
+	if containerName == "backpack" then
+		return true
+	end
+
+	if containerName == "rig" then
+		return item.category == "mag" or item.category == "med"
+	end
+
+	return false
 end
 
 local function getOrCreateState(player: Player): InventoryState
@@ -171,32 +208,12 @@ local function getOrCreateState(player: Player): InventoryState
             templateId = "rifle_m4",
             category = "gun",
             acceptedMagTemplateIds = { "mag_556_30" },
-            attachedMagId = "mag_556_1",
-        },
-        mag_556_1 = {
-            itemId = "mag_556_1",
-            templateId = "mag_556_30",
-            category = "mag",
-            ammo = 30,
-            capacity = 30,
-        },
-        mag_556_2 = {
-            itemId = "mag_556_2",
-            templateId = "mag_556_30",
-            category = "mag",
-            ammo = 30,
-            capacity = 30,
+            attachedMagId = nil,
         },
         knife_1 = {
             itemId = "knife_1",
             templateId = "knife",
             category = "melee",
-        },
-        ifak_1 = {
-            itemId = "ifak_1",
-            templateId = "ifak",
-            category = "med",
-            stack = 1,
         },
     }
 
@@ -211,7 +228,7 @@ local function getOrCreateState(player: Player): InventoryState
         },
         rig = {
             capacity = 8,
-            itemIds = { "mag_556_2", "ifak_1" },
+            itemIds = {},
         },
         backpack = {
             capacity = 12,
@@ -223,10 +240,152 @@ local function getOrCreateState(player: Player): InventoryState
         lastCheckMag = nil,
         cooldowns = {},
         lastCheckMagSeq = 0,
+        nextItemId = 1,
     }
 
     states[player.UserId] = state
     return state
+end
+
+local function makeItemId(state: InventoryState, templateId: string): string
+	local itemId = string.format("%s_%d", templateId, state.nextItemId)
+	state.nextItemId += 1
+	return itemId
+end
+
+local function createItemFromTemplate(state: InventoryState, templateId: string): Item?
+	local definition = LootDefinitions.get(templateId)
+	if not definition then
+		return nil
+	end
+
+	return {
+		itemId = makeItemId(state, templateId),
+		templateId = templateId,
+		category = definition.category,
+		stack = definition.stack,
+		ammo = definition.ammo,
+		capacity = definition.capacity,
+		usesRemaining = definition.usesRemaining,
+		usesMax = definition.usesMax,
+	}
+end
+
+local function addItemToContainer(state: InventoryState, container: Container, item: Item): boolean
+	if not canAddToContainer(container) then
+		return false
+	end
+
+	state.itemsById[item.itemId] = item
+	table.insert(container.itemIds, item.itemId)
+	return true
+end
+
+local function addItemByCategoryPriority(state: InventoryState, item: Item): boolean
+	if item.category == "mag" or item.category == "ammo" or item.category == "med" then
+		return addItemToContainer(state, state.rig, item)
+			or addItemToContainer(state, state.backpack, item)
+	end
+
+	return addItemToContainer(state, state.backpack, item)
+		or addItemToContainer(state, state.rig, item)
+end
+
+local function getLootHandle(lootModel: Model): BasePart?
+	local handle = lootModel:FindFirstChild("Handle")
+	if handle and handle:IsA("BasePart") then
+		return handle
+	end
+
+	local primary = lootModel.PrimaryPart
+	if primary and primary:IsA("BasePart") then
+		return primary
+	end
+
+	return nil
+end
+
+local function getLootSpawnsRoot(): Instance?
+	local maps = Workspace:FindFirstChild("Maps")
+	if not maps then
+		return nil
+	end
+
+	local level0 = maps:FindFirstChild("Level0")
+	if not level0 then
+		return nil
+	end
+
+	local gameplay = level0:FindFirstChild("Gameplay")
+	if not gameplay then
+		return nil
+	end
+
+	local loot = gameplay:FindFirstChild("Loot")
+	if not loot then
+		return nil
+	end
+
+	return loot:FindFirstChild("LootSpawns")
+end
+
+local function getLootModelFromInstance(lootInstance: Instance): Model?
+	if lootInstance:IsA("Model") then
+		return lootInstance
+	end
+
+	local parent = lootInstance.Parent
+	if parent and parent:IsA("Model") then
+		return parent
+	end
+
+	return lootInstance:FindFirstAncestorOfClass("Model")
+end
+
+local function isLootModelValid(player: Player, lootInstance: Instance): (boolean, Model?)
+	local lootSpawnsRoot = getLootSpawnsRoot()
+	if not lootSpawnsRoot then
+		return false, nil
+	end
+
+	if not lootInstance:IsDescendantOf(lootSpawnsRoot) then
+		return false, nil
+	end
+
+	local lootModel = getLootModelFromInstance(lootInstance)
+	if not lootModel then
+		return false, nil
+	end
+
+	if not lootModel:IsA("Model") then
+		return false, nil
+	end
+
+	if not lootModel:IsDescendantOf(Workspace) then
+		return false, nil
+	end
+
+	if lootedSet[lootModel] or lootModel:GetAttribute("PickedUp") == true then
+		return false, nil
+	end
+
+	local templateId = lootModel:GetAttribute("TemplateId")
+	if typeof(templateId) ~= "string" or not LootDefinitions.get(templateId) then
+		return false, nil
+	end
+
+	local character = player.Character
+	if not character then
+		return false, nil
+	end
+
+	local root = getRoot(character)
+	local handle = getLootHandle(lootModel)
+	if not root or not handle then
+		return false, nil
+	end
+
+	return (handle.Position - root.Position).Magnitude <= PICKUP_DISTANCE, lootModel
 end
 
 local function getEquippedGun(state: InventoryState): Item?
@@ -457,6 +616,154 @@ local function handleCheckMag(player: Player, state: InventoryState)
     end)
 end
 
+local function handleUseKeycard(player: Player, state: InventoryState, payload: {[string]: any})
+	if isRateLimited(state, "useKeycard", 0.15) then
+		return
+	end
+
+	local itemId = payload.itemId
+	if typeof(itemId) ~= "string" then
+		return
+	end
+
+	local item = state.itemsById[itemId]
+	if not item or item.category ~= "keycard" then
+		return
+	end
+
+	local usesRemaining = item.usesRemaining
+	if typeof(usesRemaining) ~= "number" or usesRemaining <= 0 then
+		return
+	end
+
+	item.usesRemaining = usesRemaining - 1
+	sendSnapshot(player, state)
+end
+
+local function handleMoveItem(player: Player, state: InventoryState, payload: {[string]: any})
+	if isRateLimited(state, "moveItem", 0.05) then
+		return
+	end
+
+	local itemId = payload.itemId
+	local fromContainerName = payload.fromContainer
+	local toContainerName = payload.toContainer
+	local toIndex = payload.toIndex
+
+	if typeof(itemId) ~= "string" then
+		return
+	end
+
+	if typeof(fromContainerName) ~= "string" or typeof(toContainerName) ~= "string" then
+		return
+	end
+
+	if typeof(toIndex) ~= "number" then
+		return
+	end
+
+	local item = state.itemsById[itemId]
+	if not item then
+		return
+	end
+
+	local fromContainer = getContainerByName(state, fromContainerName)
+	local toContainer = getContainerByName(state, toContainerName)
+	if not fromContainer or not toContainer then
+		return
+	end
+
+	local fromIndex = findItemIndex(fromContainer, itemId)
+	if not fromIndex then
+		return
+	end
+
+	local requestedIndex = math.floor(toIndex)
+	if requestedIndex < 1 then
+		return
+	end
+
+	if fromContainer == toContainer then
+		if requestedIndex > (#toContainer.itemIds + 1) then
+			return
+		end
+
+		table.remove(fromContainer.itemIds, fromIndex)
+
+		local adjustedIndex = requestedIndex
+		if requestedIndex > fromIndex then
+			adjustedIndex -= 1
+		end
+
+		if adjustedIndex < 1 then
+			adjustedIndex = 1
+		end
+		if adjustedIndex > (#toContainer.itemIds + 1) then
+			adjustedIndex = #toContainer.itemIds + 1
+		end
+
+		table.insert(toContainer.itemIds, adjustedIndex, itemId)
+		sendSnapshot(player, state)
+		return
+	end
+
+	if not containerAcceptsItem(toContainerName, item) then
+		return
+	end
+
+	if not canAddToContainer(toContainer) then
+		return
+	end
+
+	if requestedIndex > (#toContainer.itemIds + 1) then
+		return
+	end
+
+	table.remove(fromContainer.itemIds, fromIndex)
+	table.insert(toContainer.itemIds, requestedIndex, itemId)
+	sendSnapshot(player, state)
+end
+
+local function handlePickupLoot(player: Player, state: InventoryState, lootInstance: Instance)
+	if isRateLimited(state, "pickup", PICKUP_COOLDOWN) then return end
+	if not isAliveCharacter(player.Character) then return end
+
+	if typeof(lootInstance) ~= "Instance" then
+		return
+	end
+
+	local isValid, lootModel = isLootModelValid(player, lootInstance)
+	if not isValid or not lootModel then
+		return
+	end
+
+	lootedSet[lootModel] = true
+	lootModel:SetAttribute("PickedUp", true)
+
+	local templateId = lootModel:GetAttribute("TemplateId")
+	if typeof(templateId) ~= "string" then
+		lootedSet[lootModel] = nil
+		lootModel:SetAttribute("PickedUp", false)
+		return
+	end
+
+	local item = createItemFromTemplate(state, templateId)
+	if not item then
+		lootedSet[lootModel] = nil
+		lootModel:SetAttribute("PickedUp", false)
+		return
+	end
+
+	if not addItemByCategoryPriority(state, item) then
+		lootedSet[lootModel] = nil
+		lootModel:SetAttribute("PickedUp", false)
+		return
+	end
+
+	lootModel:Destroy()
+	sendSnapshot(player, state)
+end
+
 actionEvent.OnServerEvent:Connect(function(player: Player, payload: any)
     if typeof(payload) ~= "table" then return end
 
@@ -472,9 +779,18 @@ actionEvent.OnServerEvent:Connect(function(player: Player, payload: any)
         handleReload(player, state)
     elseif kind == "CheckMag" then
         handleCheckMag(player, state)
+    elseif kind == "MoveItem" then
+        handleMoveItem(player, state, payload)
+    elseif kind == "UseKeycard" then
+        handleUseKeycard(player, state, payload)
     elseif kind == "BindQuick" then
         -- milestone A stub
     end
+end)
+
+pickupEvent.OnServerEvent:Connect(function(player: Player, lootInstance: any)
+	local state = getOrCreateState(player)
+	handlePickupLoot(player, state, lootInstance)
 end)
 
 Players.PlayerAdded:Connect(function(player)

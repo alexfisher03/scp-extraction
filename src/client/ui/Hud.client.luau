@@ -8,9 +8,23 @@ local Packages = ReplicatedStorage:WaitForChild("Packages")
 local React = require(Packages:WaitForChild("React"))
 local ReactRoblox = require(Packages:WaitForChild("ReactRoblox"))
 
+local Net = require(ReplicatedStorage.Shared.Net)
 local InventoryStore = require(script.Parent.Parent.state.InventoryStore)
+local LootPromptStore = require(script.Parent.Parent.state.LootPromptStore)
 
 local player = Players.LocalPlayer
+local remotes = ReplicatedStorage:WaitForChild(Net.RemotesFolderName)
+local actionEvent = remotes:WaitForChild(Net.InventoryActionEventName) :: RemoteEvent
+
+type DragState = {
+	itemId: string,
+	fromContainer: string,
+}
+
+type HoverState = {
+	toContainer: string,
+	toIndex: number,
+}
 
 local function useHumanoidHealth()
 	local health, setHealth = React.useState(100)
@@ -106,6 +120,21 @@ local function useInventoryVisible()
 	return visible
 end
 
+local function useLootPrompt()
+	local prompt, setPrompt = React.useState(LootPromptStore.getPrompt())
+
+	React.useEffect(function()
+		local conn = LootPromptStore.changedSignal():Connect(function(nextPrompt)
+			setPrompt(nextPrompt)
+		end)
+		return function()
+			conn:Disconnect()
+		end
+	end, {})
+
+	return prompt
+end
+
 
 local function itemLabel(snapshot: any, itemId: string?): string
 	if not snapshot or not itemId then
@@ -119,6 +148,10 @@ local function itemLabel(snapshot: any, itemId: string?): string
 
 	if item.category == "mag" then
 		return string.format("%s (%d/%d)", item.templateId, item.ammo or 0, item.capacity or 0)
+	end
+
+	if item.category == "keycard" then
+		return string.format("%s (%d/%d uses)", item.templateId, item.usesRemaining or 0, item.usesMax or 0)
 	end
 
 	return item.templateId
@@ -162,7 +195,7 @@ local function hotbarSlot(index: number, text: string, selected: boolean)
 	})
 end
 
-local function listCard(title: string, lines: {string}, position: UDim2)
+local function listCard(title: string, lines: {string}, position: UDim2, size: UDim2)
 	local children: {[string]: any} = {
 		Layout = React.createElement("UIListLayout", {
 			FillDirection = Enum.FillDirection.Vertical,
@@ -187,7 +220,7 @@ local function listCard(title: string, lines: {string}, position: UDim2)
 	return React.createElement("Frame", {
 		AnchorPoint = Vector2.new(0, 0),
 		Position = position,
-		Size = UDim2.fromOffset(340, 220),
+		Size = size,
 		BackgroundTransparency = 0.2,
 		BackgroundColor3 = Color3.fromRGB(24, 24, 24),
 		BorderSizePixel = 0,
@@ -212,6 +245,163 @@ local function listCard(title: string, lines: {string}, position: UDim2)
 			Position = UDim2.fromOffset(10, 34),
 			Size = UDim2.new(1, -20, 1, -44),
 			BackgroundTransparency = 1,
+		}, children),
+	})
+end
+
+local function sendInventoryAction(payload: {[string]: any})
+	actionEvent:FireServer(payload)
+end
+
+local function containerSlot(
+	labelText: string,
+	layoutOrder: number,
+	isOccupied: boolean,
+	isDragging: boolean,
+	isHovered: boolean,
+	onDragStart: (() -> ())?,
+	onHoverChanged: ((boolean) -> ())?
+)
+	return React.createElement("TextButton", {
+		LayoutOrder = layoutOrder,
+		Size = UDim2.new(1, 0, 0, 24),
+		AutoButtonColor = false,
+		BackgroundTransparency = if isHovered then 0.15 elseif isDragging then 0.25 else 0.45,
+		BackgroundColor3 = if isHovered
+			then Color3.fromRGB(90, 78, 34)
+			elseif isDragging
+			then Color3.fromRGB(60, 60, 60)
+			else Color3.fromRGB(28, 28, 28),
+		BorderSizePixel = 0,
+		Text = labelText,
+		Font = Enum.Font.Code,
+		TextSize = 14,
+		TextColor3 = if isOccupied then Color3.new(1, 1, 1) else Color3.fromRGB(145, 145, 145),
+		TextXAlignment = Enum.TextXAlignment.Left,
+		[React.Event.MouseEnter] = function()
+			if onHoverChanged then
+				onHoverChanged(true)
+			end
+		end,
+		[React.Event.MouseLeave] = function()
+			if onHoverChanged then
+				onHoverChanged(false)
+			end
+		end,
+		[React.Event.MouseButton1Down] = function()
+			if onDragStart then
+				onDragStart()
+			end
+		end,
+	}, {
+		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
+		Padding = React.createElement("UIPadding", {
+			PaddingLeft = UDim.new(0, 8),
+			PaddingRight = UDim.new(0, 8),
+		}),
+		Stroke = React.createElement("UIStroke", {
+			Thickness = if isHovered then 1.5 else 1,
+			Transparency = if isHovered then 0 else 0.45,
+			Color = if isHovered then Color3.fromRGB(255, 225, 130) else Color3.fromRGB(90, 90, 90),
+		}),
+	})
+end
+
+local function containerCard(
+	title: string,
+	containerName: string,
+	snapshot: any,
+	position: UDim2,
+	size: UDim2,
+	dragState: DragState?,
+	hoverState: HoverState?,
+	setHoverState: (HoverState?) -> (),
+	setDragState: (DragState?) -> ()
+)
+	local container = snapshot and snapshot[containerName] or nil
+	local capacity = if container then container.capacity else 0
+	local itemIds = if container then container.itemIds else {}
+
+	local children: {[string]: any} = {
+		Layout = React.createElement("UIListLayout", {
+			FillDirection = Enum.FillDirection.Vertical,
+			Padding = UDim.new(0, 6),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+	}
+
+	for slotIndex = 1, capacity do
+		local itemId = itemIds[slotIndex]
+		local isOccupied = itemId ~= nil
+		local canDropHere = dragState ~= nil and slotIndex <= (#itemIds + 1)
+		local isHovered = hoverState ~= nil
+			and hoverState.toContainer == containerName
+			and hoverState.toIndex == slotIndex
+		local isDragging = dragState ~= nil and dragState.itemId == itemId
+
+		children["Slot" .. slotIndex] = containerSlot(
+			if isOccupied then itemLabel(snapshot, itemId) else string.format("[%d] Empty", slotIndex),
+			slotIndex,
+			isOccupied,
+			isDragging,
+			isHovered,
+			if isOccupied then function()
+				setDragState({
+					itemId = itemId :: string,
+					fromContainer = containerName,
+				})
+				setHoverState({
+					toContainer = containerName,
+					toIndex = slotIndex,
+				})
+			end else nil,
+			if canDropHere then function(isInside)
+				if isInside then
+					setHoverState({
+						toContainer = containerName,
+						toIndex = slotIndex,
+					})
+				elseif isHovered then
+					setHoverState(nil)
+				end
+			end else nil
+		)
+	end
+
+	return React.createElement("Frame", {
+		AnchorPoint = Vector2.new(0, 0),
+		Position = position,
+		Size = size,
+		BackgroundTransparency = 0.2,
+		BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+		BorderSizePixel = 0,
+	}, {
+		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+		Stroke = React.createElement("UIStroke", {
+			Thickness = 1,
+			Transparency = 0.2,
+			Color = Color3.fromRGB(75, 75, 75),
+		}),
+		Title = React.createElement("TextLabel", {
+			Position = UDim2.fromOffset(10, 8),
+			Size = UDim2.new(1, -20, 0, 22),
+			BackgroundTransparency = 1,
+			Text = title,
+			Font = Enum.Font.GothamBold,
+			TextSize = 15,
+			TextColor3 = Color3.fromRGB(255, 225, 130),
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}),
+		List = React.createElement("ScrollingFrame", {
+			Position = UDim2.fromOffset(10, 34),
+			Size = UDim2.new(1, -20, 1, -44),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			CanvasSize = UDim2.new(0, 0, 0, math.max(0, capacity * 30)),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			ScrollBarThickness = 6,
+			ScrollBarImageColor3 = Color3.fromRGB(110, 110, 110),
 		}, children),
 	})
 end
@@ -251,7 +441,10 @@ local function HudApp()
 	local health, maxHealth = useHumanoidHealth()
 	local snapshot = useSnapshot()
 	local inventoryVisible = useInventoryVisible()
+	local lootPrompt = useLootPrompt()
 	local timedCheckMagText = useTimedCheckMagText(snapshot)
+	local dragState, setDragState = React.useState(nil :: DragState?)
+	local hoverState, setHoverState = React.useState(nil :: HoverState?)
 
 	local hpText = string.format("HP %d/%d", math.floor(health + 0.5), math.floor(maxHealth + 0.5))
 
@@ -291,6 +484,43 @@ local function HudApp()
 	end
 
 	local rootChildren: {[string]: any} = {}
+
+	React.useEffect(function()
+		if not inventoryVisible or not dragState then
+			return
+		end
+
+		local conn = UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+				return
+			end
+
+			local activeHover = hoverState
+			if activeHover then
+				sendInventoryAction({
+					kind = "MoveItem",
+					itemId = dragState.itemId,
+					fromContainer = dragState.fromContainer,
+					toContainer = activeHover.toContainer,
+					toIndex = activeHover.toIndex,
+				})
+			end
+
+			setDragState(nil)
+			setHoverState(nil)
+		end)
+
+		return function()
+			conn:Disconnect()
+		end
+	end, { inventoryVisible, dragState, hoverState })
+
+	React.useEffect(function()
+		if not inventoryVisible then
+			setDragState(nil)
+			setHoverState(nil)
+		end
+	end, { inventoryVisible })
 
 	if not inventoryVisible then
 		local barChildren: {[string]: any} = {
@@ -365,6 +595,36 @@ local function HudApp()
 			Size = UDim2.fromOffset(5 * 56 + 4 * 8, 56),
 			BackgroundTransparency = 1,
 		}, barChildren)
+
+		if lootPrompt.model and lootPrompt.displayName then
+			rootChildren.LootPrompt = React.createElement("TextLabel", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.56),
+				AutomaticSize = Enum.AutomaticSize.XY,
+				BackgroundTransparency = 0.2,
+				BackgroundColor3 = Color3.fromRGB(18, 18, 18),
+				BorderSizePixel = 0,
+				Text = string.format("%s. Press E", lootPrompt.displayName),
+				Font = Enum.Font.GothamBold,
+				TextSize = 20,
+				TextColor3 = Color3.new(1, 1, 1),
+			}, {
+				Corner = React.createElement("UICorner", {
+					CornerRadius = UDim.new(0, 8),
+				}),
+				Stroke = React.createElement("UIStroke", {
+					Thickness = 1,
+					Transparency = 0.15,
+					Color = Color3.fromRGB(255, 225, 130),
+				}),
+				Padding = React.createElement("UIPadding", {
+					PaddingLeft = UDim.new(0, 16),
+					PaddingRight = UDim.new(0, 16),
+					PaddingTop = UDim.new(0, 8),
+					PaddingBottom = UDim.new(0, 8),
+				}),
+			})
+		end
 	else
 		local weaponRows = {
 			string.format("PrimaryA: %s", snapshot and itemLabel(snapshot, snapshot.weaponSlots.PrimaryA) or "[Empty]"),
@@ -374,25 +634,10 @@ local function HudApp()
 			string.format("Equipped: %s", snapshot and (snapshot.equippedSlot or "None") or "None"),
 		}
 
-		local rigRows: {string} = {}
-		local backpackRows: {string} = {}
-
-		if snapshot then
-			for i, itemId in ipairs(snapshot.rig.itemIds) do
-				rigRows[i] = itemLabel(snapshot, itemId)
-			end
-			for i, itemId in ipairs(snapshot.backpack.itemIds) do
-				backpackRows[i] = itemLabel(snapshot, itemId)
-			end
-		end
-
-		if #rigRows == 0 then rigRows[1] = "[Empty]" end
-		if #backpackRows == 0 then backpackRows[1] = "[Empty]" end
-
 		rootChildren.InventoryRoot = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(720, 520),
+			Size = UDim2.fromScale(0.65, 0.85),
 			BackgroundTransparency = 0.12,
 			BackgroundColor3 = Color3.fromRGB(12, 12, 12),
 			BorderSizePixel = 0,
@@ -407,15 +652,50 @@ local function HudApp()
 				Position = UDim2.fromOffset(16, 10),
 				Size = UDim2.new(1, -32, 0, 24),
 				BackgroundTransparency = 1,
-				Text = "Inventory (Tab to Close)",
+				Text = "Inventory (Tab to Close, drag between Rig and Backpack)",
 				Font = Enum.Font.GothamBold,
 				TextSize = 16,
 				TextXAlignment = Enum.TextXAlignment.Left,
 				TextColor3 = Color3.fromRGB(255, 225, 130),
 			}),
-			Weapons = listCard("Weapon Slots", weaponRows, UDim2.fromOffset(16, 44)),
-			Rig = listCard("Rig", rigRows, UDim2.fromOffset(364, 44)),
-			Backpack = listCard("Backpack", backpackRows, UDim2.fromOffset(16, 282)),
+			DragHint = React.createElement("TextLabel", {
+				Position = UDim2.new(0, 16, 1, -28),
+				Size = UDim2.new(1, -32, 0, 18),
+				BackgroundTransparency = 1,
+				Text = if dragState then ("Dragging: " .. itemLabel(snapshot, dragState.itemId)) else "Drag an item to a slot in Rig or Backpack.",
+				Font = Enum.Font.Gotham,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextColor3 = if dragState then Color3.fromRGB(255, 225, 130) else Color3.fromRGB(180, 180, 180),
+			}),
+			Weapons = listCard(
+				"Weapon Slots",
+				weaponRows,
+				UDim2.new(0, 16, 0, 44),
+				UDim2.new(0.47, -24, 0.42, -8)
+			),
+			Rig = containerCard(
+				"Rig",
+				"rig",
+				snapshot,
+				UDim2.new(0.5, 8, 0, 44),
+				UDim2.new(0.5, -24, 0.58, -56),
+				dragState,
+				hoverState,
+				setHoverState,
+				setDragState
+			),
+			Backpack = containerCard(
+				"Backpack",
+				"backpack",
+				snapshot,
+				UDim2.new(0, 16, 0.42, 52),
+				UDim2.new(0.47, -24, 0.58, -80),
+				dragState,
+				hoverState,
+				setHoverState,
+				setDragState
+			),
 		})
 	end
 

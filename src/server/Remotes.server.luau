@@ -24,5 +24,6 @@ end
 
 ensureRemote(Net.InventoryActionEventName)
 ensureRemote(Net.InventorySnapshotEventName)
+ensureRemote(Net.LootPickupRequestEventName)
 
 return folder
