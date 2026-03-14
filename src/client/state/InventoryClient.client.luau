@@ -2,6 +2,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Net = require(ReplicatedStorage.Shared.Net)
@@ -17,6 +18,8 @@ local snapshotEvent = remotes:WaitForChild(Net.InventorySnapshotEventName) :: Re
 local controls: any = nil
 local CLOSED_CAMERA_MODE = Enum.CameraMode.LockFirstPerson
 local OPEN_CAMERA_MODE = Enum.CameraMode.Classic
+local inventoryCameraConn: RBXScriptConnection? = nil
+local inventoryCameraOffset: CFrame? = nil
 
 local function getControls()
 	if controls then
@@ -28,6 +31,45 @@ local function getControls()
 	return controls
 end
 
+local function getCameraAnchor(): BasePart?
+	local character = player.Character
+	if not character then
+		return nil
+	end
+
+	return character:FindFirstChild("Head") :: BasePart?
+		or character:FindFirstChild("HumanoidRootPart") :: BasePart?
+end
+
+local function stopInventoryCameraFollow()
+	if inventoryCameraConn then
+		inventoryCameraConn:Disconnect()
+		inventoryCameraConn = nil
+	end
+	inventoryCameraOffset = nil
+end
+
+local function startInventoryCameraFollow()
+	stopInventoryCameraFollow()
+
+	local anchor = getCameraAnchor()
+	if not anchor or not camera then
+		return
+	end
+
+	inventoryCameraOffset = anchor.CFrame:ToObjectSpace(camera.CFrame)
+
+	inventoryCameraConn = RunService.RenderStepped:Connect(function()
+		local currentAnchor = getCameraAnchor()
+		if not currentAnchor or not camera or not inventoryCameraOffset then
+			return
+		end
+
+		camera.CFrame = currentAnchor.CFrame * inventoryCameraOffset
+		camera.Focus = currentAnchor.CFrame
+	end)
+end
+
 local function applyInventoryInputMode(visible: boolean)
 	local ctl = getControls()
 
@@ -37,14 +79,14 @@ local function applyInventoryInputMode(visible: boolean)
 		-- Free cursor for UI
 		UserInputService.MouseIconEnabled = true
 		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-
-		-- Hard-freeze look
 		player.CameraMode = OPEN_CAMERA_MODE
 		if camera then
 			camera.CameraType = Enum.CameraType.Scriptable
 		end
+		startInventoryCameraFollow()
 	else
 		ctl:Enable()
+		stopInventoryCameraFollow()
 
 		-- Gameplay mouse lock
 		UserInputService.MouseIconEnabled = false
