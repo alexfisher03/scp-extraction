@@ -2,6 +2,8 @@
 --!strict
 
 local TweenService = game:GetService("TweenService")
+local InventoryAuthority = require(script.Parent.Parent.inventory.InventoryAuthority)
+local RaidAuthority = require(script.Parent.Parent.raid.RaidAuthority)
 
 local SCPDoorController = {}
 
@@ -11,15 +13,56 @@ local function getBoolAttr(inst: Instance, name: string, default: boolean): bool
 	return default
 end
 
-local function getNumberAttr(inst: Instance, name: string, default: number): number
-	local v = inst:GetAttribute(name)
-	if typeof(v) == "number" then return v end
-	return default
+local function getRequiredKeyLevel(doorModel: Model): number
+	local required = doorModel:GetAttribute("RequiredKeyLevel")
+
+	if typeof(required) ~= "number" then
+		return 0
+	end
+
+	return required
 end
 
--- TODO: replace with your real inventory system later
-local function playerHasKeycardAtLeast(_player: Player, requiredLevel: number): boolean
-	return requiredLevel <= 0
+local function findAndConsumeKeycard(state: any, templateId: string): boolean
+	for _, containerName in ipairs({ "backpack", "rig" }) do
+		local container = state[containerName]
+		if container then
+			for slotIndex = 1, container.capacity do
+				local itemId = container.itemIds[slotIndex]
+				local item = itemId and state.itemsById[itemId] or nil
+				if item and item.templateId == templateId and (item.usesRemaining or 0) > 0 then
+					item.usesRemaining = (item.usesRemaining or 0) - 1
+					return true
+				end
+			end
+		end
+	end
+
+	return false
+end
+
+local function tryConsumeKey(player: Player, requiredLevel: number): (boolean, string?)
+	if requiredLevel <= 0 then
+		return true, nil
+	end
+
+	local state = InventoryAuthority.getState(player.UserId)
+	if not state then
+		return false, nil
+	end
+
+	local exactCardTemplateId = string.format("card_%d", requiredLevel)
+	if findAndConsumeKeycard(state, exactCardTemplateId) then
+		InventoryAuthority.emitSnapshot(player, state)
+		return true, exactCardTemplateId
+	end
+
+	if findAndConsumeKeycard(state, "card_omni") then
+		InventoryAuthority.emitSnapshot(player, state)
+		return true, "card_omni"
+	end
+
+	return false, nil
 end
 
 local function playSound(inst: Instance?, soundName: string)
@@ -113,20 +156,30 @@ function SCPDoorController.bind(doorModel: Model)
 	end
 
 	local function tryToggle(player: Player, pressedButton: Instance?)
-		local locked = getBoolAttr(doorModel, "Locked", false)
-		local required = getNumberAttr(doorModel, "RequiredKeycardLevel", 0)
+		if not RaidAuthority.isInRaid(player.UserId) then
+			return
+		end
 
-		-- Button push sound (only if not locked)
-		if not locked and pressedButton then
+		local required = getRequiredKeyLevel(doorModel)
+		local unlockedThisRaid = getBoolAttr(doorModel, "UnlockedThisRaid", false)
+		local lockedAttr = doorModel:GetAttribute("Locked")
+		local locked = if typeof(lockedAttr) == "boolean" then lockedAttr else required > 0
+
+		if required <= 0 and pressedButton then
+			playSound(pressedButton, "Push")
+		elseif (not locked or unlockedThisRaid) and pressedButton then
 			playSound(pressedButton, "Push")
 		end
 
-		if locked and not playerHasKeycardAtLeast(player, required) then
-			-- Audio: Door1.LockedSound if present
-			playSound(door1, "LockedSound")
+		if required > 0 and not unlockedThisRaid and locked then
+			local consumed, _usedCard = tryConsumeKey(player, required)
+			if not consumed then
+				playSound(door1, "LockedSound")
+				return
+			end
 
-			-- Optional: if your model has DoorGui under the Script like before, you can re-add UI later.
-			return
+			doorModel:SetAttribute("UnlockedThisRaid", true)
+			doorModel:SetAttribute("Locked", false)
 		end
 
 		local currentlyOpen = (isOpen and isOpen.Value) or false

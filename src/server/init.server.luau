@@ -1,4 +1,5 @@
 require(script.Parent:WaitForChild("Remotes"))
 require(script.Parent:WaitForChild("SpawnService"))
 require(script.Parent:WaitForChild("InventoryService"))
+require(script.Parent:WaitForChild("RaidService"))
 require(script.Parent:WaitForChild("LoadoutService"))

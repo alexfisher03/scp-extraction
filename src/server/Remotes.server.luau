@@ -25,5 +25,14 @@ end
 ensureRemote(Net.InventoryActionEventName)
 ensureRemote(Net.InventorySnapshotEventName)
 ensureRemote(Net.LootPickupRequestEventName)
+ensureRemote(Net.MoveItemRequestEventName)
+ensureRemote(Net.DropItemRequestEventName)
+ensureRemote(Net.ItemActionRequestEventName)
+ensureRemote(Net.ExtractRequestStartEventName)
+ensureRemote(Net.RaidStateEventName)
+ensureRemote(Net.BodyLootOpenRequestEventName)
+ensureRemote(Net.BodyLootCloseRequestEventName)
+ensureRemote(Net.BodyLootTransferRequestEventName)
+ensureRemote(Net.BodyLootSnapshotEventName)
 
 return folder

@@ -135,6 +135,11 @@ local slotByKey = {
 
 UserInputService.InputBegan:Connect(function(input, processed)
 	if input.KeyCode == Enum.KeyCode.Tab then
+		if player:GetAttribute("RaidPhase") == "Stash" or player:GetAttribute("BodyLootOpen") == true then
+			setInventoryVisible(true)
+			return
+		end
+
 		local current = player:GetAttribute("InventoryVisible")
 		local nowVisible = not (typeof(current) == "boolean" and current)
 		setInventoryVisible(nowVisible)

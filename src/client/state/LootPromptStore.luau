@@ -3,16 +3,20 @@
 local LootPromptStore = {}
 
 export type PromptState = {
-	model: Model?,
+	kind: string?,
+	target: Instance?,
 	templateId: string?,
 	displayName: string?,
+	text: string?,
 }
 
 local changed = Instance.new("BindableEvent")
 local state: PromptState = {
-	model = nil,
+	kind = nil,
+	target = nil,
 	templateId = nil,
 	displayName = nil,
+	text = nil,
 }
 
 function LootPromptStore.setPrompt(nextState: PromptState)
@@ -22,9 +26,11 @@ end
 
 function LootPromptStore.clear()
 	LootPromptStore.setPrompt({
-		model = nil,
+		kind = nil,
+		target = nil,
 		templateId = nil,
 		displayName = nil,
+		text = nil,
 	})
 end
 

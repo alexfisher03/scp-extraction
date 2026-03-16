@@ -2,6 +2,8 @@
 
 local Players = game:GetService("Players")
 
+local RaidAuthority = require(script.Parent.raid.RaidAuthority)
+
 local function getSpawnFolder(): Folder
     local maps = workspace:WaitForChild("Maps")
     local level0 = maps:WaitForChild("Level0")
@@ -28,10 +30,28 @@ local function chooseSpawn(points: {BasePart}): BasePart
     return points[5]
 end
 
+local function getLobbySpawnPoint(): BasePart?
+	local spawnsFolder = getSpawnFolder()
+	local lobby = spawnsFolder:FindFirstChild("placehold_lobby")
+	if lobby and lobby:IsA("BasePart") then
+		return lobby
+	end
+
+	return nil
+end
+
 local function spawnCharacterAt(player: Player, character: Model)
     local hrp = character:WaitForChild("HumanoidRootPart") :: BasePart
-    local points = getSpawnPoints()
-    local spawnPoint = chooseSpawn(points)
+    local spawnPoint: BasePart?
+	local raidState = RaidAuthority.getState(player.UserId)
+	if raidState and raidState.phase == "Stash" then
+		spawnPoint = getLobbySpawnPoint()
+	end
+
+	if not spawnPoint then
+		local points = getSpawnPoints()
+		spawnPoint = chooseSpawn(points)
+	end
 
     -- Place character slightly above the marker
     local cf = spawnPoint.CFrame + Vector3.new(0, 3, 0)

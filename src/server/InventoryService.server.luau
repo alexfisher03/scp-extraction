@@ -6,11 +6,16 @@ local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local LootDefinitions = require(ReplicatedStorage.Shared.LootDefinitions)
+local InventoryAuthority = require(script.Parent.inventory.InventoryAuthority)
+local RaidAuthority = require(script.Parent.raid.RaidAuthority)
 
 local remotes = ReplicatedStorage:WaitForChild(Net.RemotesFolderName)
 local actionEvent = remotes:WaitForChild(Net.InventoryActionEventName) :: RemoteEvent
 local snapshotEvent = remotes:WaitForChild(Net.InventorySnapshotEventName) :: RemoteEvent
 local pickupEvent = remotes:WaitForChild(Net.LootPickupRequestEventName) :: RemoteEvent
+local moveItemEvent = remotes:WaitForChild(Net.MoveItemRequestEventName) :: RemoteEvent
+local dropItemEvent = remotes:WaitForChild(Net.DropItemRequestEventName) :: RemoteEvent
+local itemActionEvent = remotes:WaitForChild(Net.ItemActionRequestEventName) :: RemoteEvent
 
 local MAX_DISTANCE = 300
 local DAMAGE = 30
@@ -30,6 +35,7 @@ type Item = {
     itemId: string,
     templateId: string,
     category: string,
+    locationState: string?,
     stack: number?,
     ammo: number?,
     capacity: number?,
@@ -41,7 +47,7 @@ type Item = {
 
 type Container = {
     capacity: number,
-    itemIds: {string},
+    itemIds: {string?},
 }
 
 type InventoryState = {
@@ -59,15 +65,42 @@ type InventoryState = {
     nextItemId: number,
 }
 
-local states: {[number]: InventoryState} = {}
 local lootedSet: {[Instance]: boolean} = {}
 
 local function cloneArray<T>(arr: {T}): {T}
-    local out = table.create(#arr)
-    for i, v in ipairs(arr) do
-        out[i] = v
-    end
-    return out
+	local out = table.create(#arr)
+	for i, v in ipairs(arr) do
+		out[i] = v
+	end
+	return out
+end
+
+local function cloneContainerItemIds(container: Container): {string}
+	local out = table.create(container.capacity)
+	for slotIndex = 1, container.capacity do
+		out[slotIndex] = container.itemIds[slotIndex] or ""
+	end
+	return out
+end
+
+local function countContainerItems(container: Container): number
+	local count = 0
+	for slotIndex = 1, container.capacity do
+		if container.itemIds[slotIndex] ~= nil then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function getFirstEmptySlot(container: Container): number?
+	for slotIndex = 1, container.capacity do
+		if container.itemIds[slotIndex] == nil then
+			return slotIndex
+		end
+	end
+
+	return nil
 end
 
 local function cloneItems(itemsById: {[string]: Item}): {[string]: Item}
@@ -99,11 +132,11 @@ local function toSnapshot(state: InventoryState)
         weaponSlots = table.clone(state.weaponSlots),
         rig = {
             capacity = state.rig.capacity,
-            itemIds = cloneArray(state.rig.itemIds),
+            itemIds = cloneContainerItemIds(state.rig),
         },
         backpack = {
             capacity = state.backpack.capacity,
-            itemIds = cloneArray(state.backpack.itemIds),
+            itemIds = cloneContainerItemIds(state.backpack),
         },
         quickBinds = table.clone(state.quickBinds),
         hotbarItemIds = buildHotbarItemIds(state),
@@ -118,6 +151,8 @@ local function sendSnapshot(player: Player, state: InventoryState)
     state.version += 1
     snapshotEvent:FireClient(player, toSnapshot(state))
 end
+
+InventoryAuthority.setSnapshotEmitter(sendSnapshot)
 
 local function isAliveCharacter(character: Model?): boolean
     if not character then return false end
@@ -140,19 +175,19 @@ local function isRateLimited(state: InventoryState, key: string, cooldown: numbe
 end
 
 local function removeFromContainer(container: Container, itemId: string): boolean
-    for i, id in ipairs(container.itemIds) do
-        if id == itemId then
-            table.remove(container.itemIds, i)
-            return true
-        end
-    end
-    return false
+	for slotIndex = 1, container.capacity do
+		if container.itemIds[slotIndex] == itemId then
+			container.itemIds[slotIndex] = nil
+			return true
+		end
+	end
+	return false
 end
 
 local function findItemIndex(container: Container, itemId: string): number?
-	for i, id in ipairs(container.itemIds) do
-		if id == itemId then
-			return i
+	for slotIndex = 1, container.capacity do
+		if container.itemIds[slotIndex] == itemId then
+			return slotIndex
 		end
 	end
 
@@ -160,24 +195,19 @@ local function findItemIndex(container: Container, itemId: string): number?
 end
 
 local function containerHasItem(container: Container, itemId: string): boolean
-    for _, id in ipairs(container.itemIds) do
-        if id == itemId then
-            return true
-        end
-    end
-    return false
+	return findItemIndex(container, itemId) ~= nil
 end
 
 local function canAddToContainer(container: Container): boolean
-    return #container.itemIds < container.capacity
+    return countContainerItems(container) < container.capacity
 end
 
 local function getContainerByName(state: InventoryState, containerName: string): Container?
-	if containerName == "rig" then
+	if containerName == "rig" or containerName == "Rig" then
 		return state.rig
 	end
 
-	if containerName == "backpack" then
+	if containerName == "backpack" or containerName == "Backpack" then
 		return state.backpack
 	end
 
@@ -185,11 +215,11 @@ local function getContainerByName(state: InventoryState, containerName: string):
 end
 
 local function containerAcceptsItem(containerName: string, item: Item): boolean
-	if containerName == "backpack" then
+	if containerName == "backpack" or containerName == "Backpack" then
 		return true
 	end
 
-	if containerName == "rig" then
+	if containerName == "rig" or containerName == "Rig" then
 		return item.category == "mag" or item.category == "med"
 	end
 
@@ -197,7 +227,7 @@ local function containerAcceptsItem(containerName: string, item: Item): boolean
 end
 
 local function getOrCreateState(player: Player): InventoryState
-    local existing = states[player.UserId]
+    local existing = InventoryAuthority.getState(player.UserId)
     if existing then
         return existing
     end
@@ -207,6 +237,7 @@ local function getOrCreateState(player: Player): InventoryState
             itemId = "gun_primary_1",
             templateId = "rifle_m4",
             category = "gun",
+            locationState = "inRaid",
             acceptedMagTemplateIds = { "mag_556_30" },
             attachedMagId = nil,
         },
@@ -214,6 +245,7 @@ local function getOrCreateState(player: Player): InventoryState
             itemId = "knife_1",
             templateId = "knife",
             category = "melee",
+            locationState = "inRaid",
         },
     }
 
@@ -243,7 +275,7 @@ local function getOrCreateState(player: Player): InventoryState
         nextItemId = 1,
     }
 
-    states[player.UserId] = state
+    InventoryAuthority.setState(player.UserId, state)
     return state
 end
 
@@ -263,6 +295,7 @@ local function createItemFromTemplate(state: InventoryState, templateId: string)
 		itemId = makeItemId(state, templateId),
 		templateId = templateId,
 		category = definition.category,
+		locationState = "inRaid",
 		stack = definition.stack,
 		ammo = definition.ammo,
 		capacity = definition.capacity,
@@ -271,13 +304,51 @@ local function createItemFromTemplate(state: InventoryState, templateId: string)
 	}
 end
 
+local function applyLootModelStateToItem(lootModel: Model, item: Item)
+	local usesRemaining = lootModel:GetAttribute("UsesRemaining")
+	if typeof(usesRemaining) == "number" then
+		item.usesRemaining = usesRemaining
+	end
+
+	local usesMax = lootModel:GetAttribute("UsesMax")
+	if typeof(usesMax) == "number" then
+		item.usesMax = usesMax
+	end
+
+	local ammo = lootModel:GetAttribute("Ammo")
+	if typeof(ammo) == "number" then
+		item.ammo = ammo
+	end
+
+	local capacity = lootModel:GetAttribute("Capacity")
+	if typeof(capacity) == "number" then
+		item.capacity = capacity
+	end
+end
+
+local function applyItemStateToLootModel(droppedModel: Model, item: Item)
+	if item.usesRemaining ~= nil then
+		droppedModel:SetAttribute("UsesRemaining", item.usesRemaining)
+	end
+	if item.usesMax ~= nil then
+		droppedModel:SetAttribute("UsesMax", item.usesMax)
+	end
+	if item.ammo ~= nil then
+		droppedModel:SetAttribute("Ammo", item.ammo)
+	end
+	if item.capacity ~= nil then
+		droppedModel:SetAttribute("Capacity", item.capacity)
+	end
+end
+
 local function addItemToContainer(state: InventoryState, container: Container, item: Item): boolean
-	if not canAddToContainer(container) then
+	local slotIndex = getFirstEmptySlot(container)
+	if not slotIndex then
 		return false
 	end
 
 	state.itemsById[item.itemId] = item
-	table.insert(container.itemIds, item.itemId)
+	container.itemIds[slotIndex] = item.itemId
 	return true
 end
 
@@ -329,6 +400,20 @@ local function getLootSpawnsRoot(): Instance?
 	return loot:FindFirstChild("LootSpawns")
 end
 
+local function isRecognizedLootRoot(instance: Instance): boolean
+	local lootSpawnsRoot = getLootSpawnsRoot()
+	if lootSpawnsRoot and instance:IsDescendantOf(lootSpawnsRoot) then
+		return true
+	end
+
+	local droppedLootFolder = Workspace:FindFirstChild("DroppedLoot")
+	if droppedLootFolder and instance:IsDescendantOf(droppedLootFolder) then
+		return true
+	end
+
+	return false
+end
+
 local function getLootModelFromInstance(lootInstance: Instance): Model?
 	if lootInstance:IsA("Model") then
 		return lootInstance
@@ -343,12 +428,7 @@ local function getLootModelFromInstance(lootInstance: Instance): Model?
 end
 
 local function isLootModelValid(player: Player, lootInstance: Instance): (boolean, Model?)
-	local lootSpawnsRoot = getLootSpawnsRoot()
-	if not lootSpawnsRoot then
-		return false, nil
-	end
-
-	if not lootInstance:IsDescendantOf(lootSpawnsRoot) then
+	if not isRecognizedLootRoot(lootInstance) then
 		return false, nil
 	end
 
@@ -436,6 +516,10 @@ local function isCompatibleMag(gun: Item, mag: Item): boolean
 end
 
 local function handleEquipSlot(player: Player, state: InventoryState, payload: {[string]: any})
+	if not RaidAuthority.isInRaid(player.UserId) then
+		return
+	end
+
     if isRateLimited(state, "equip", EQUIP_COOLDOWN) then return end
 
     local slot = payload.slot
@@ -465,6 +549,7 @@ local function handleEquipSlot(player: Player, state: InventoryState, payload: {
 end
 
 local function handleFire(player: Player, state: InventoryState, payload: {[string]: any})
+    if not RaidAuthority.isInRaid(player.UserId) then return end
     if isRateLimited(state, "fire", FIRE_COOLDOWN) then return end
     if state.isReloading then return end
     if not isAliveCharacter(player.Character) then return end
@@ -519,21 +604,22 @@ local function handleFire(player: Player, state: InventoryState, payload: {[stri
 end
 
 local function findReloadCandidate(state: InventoryState, gun: Item): (string?, string?)
-    for _, containerName in ipairs({ "rig", "backpack" }) do
-        local container = if containerName == "rig" then state.rig else state.backpack
-        for _, itemId in ipairs(container.itemIds) do
-            local item = state.itemsById[itemId]
-            if item and item.category == "mag" and isCompatibleMag(gun, item) and (item.ammo or 0) > 0 then
-                if gun.attachedMagId ~= itemId then
-                    return itemId, containerName
-                end
-            end
-        end
-    end
+	for slotIndex = 1, state.rig.capacity do
+		local itemId = state.rig.itemIds[slotIndex]
+		local item = itemId and state.itemsById[itemId] or nil
+		if item and item.category == "mag" and isCompatibleMag(gun, item) and (item.ammo or 0) > 0 then
+			if gun.attachedMagId ~= itemId then
+				return itemId, "rig"
+			end
+		end
+	end
+
+    warn("[InventoryService] Reload failed: no compatible loaded magazine in rig")
     return nil, nil
 end
 
 local function handleReload(player: Player, state: InventoryState)
+    if not RaidAuthority.isInRaid(player.UserId) then return end
     if isRateLimited(state, "reload", RELOAD_COOLDOWN) then return end
     if state.isReloading then return end
     if not isAliveCharacter(player.Character) then return end
@@ -551,7 +637,7 @@ local function handleReload(player: Player, state: InventoryState)
     sendSnapshot(player, state)
 
     task.delay(RELOAD_SECONDS, function()
-        local current = states[player.UserId]
+        local current = InventoryAuthority.getState(player.UserId)
         if not current then return end
         if not player.Parent then return end
 
@@ -571,14 +657,14 @@ local function handleReload(player: Player, state: InventoryState)
 
         local oldMagId = currentGun.attachedMagId
         if oldMagId then
-            if canAddToContainer(srcContainer) then
-                table.insert(srcContainer.itemIds, oldMagId)
-            elseif canAddToContainer(current.rig) then
-                table.insert(current.rig.itemIds, oldMagId)
-            elseif canAddToContainer(current.backpack) then
-                table.insert(current.backpack.itemIds, oldMagId)
+            if addItemToContainer(current, srcContainer, current.itemsById[oldMagId]) then
+                -- placed old mag back into the source container
+            elseif addItemToContainer(current, current.rig, current.itemsById[oldMagId]) then
+                -- fallback rig slot
+            elseif addItemToContainer(current, current.backpack, current.itemsById[oldMagId]) then
+                -- fallback backpack slot
             else
-                table.insert(srcContainer.itemIds, newMagId)
+                addItemToContainer(current, srcContainer, current.itemsById[newMagId])
                 current.isReloading = false
                 sendSnapshot(player, current)
                 return
@@ -592,12 +678,13 @@ local function handleReload(player: Player, state: InventoryState)
 end
 
 local function handleCheckMag(player: Player, state: InventoryState)
+    if not RaidAuthority.isInRaid(player.UserId) then return end
     if isRateLimited(state, "checkMag", CHECK_MAG_COOLDOWN) then return end
     if state.isReloading then return end
     if not isAliveCharacter(player.Character) then return end
 
     task.delay(CHECK_MAG_SECONDS, function()
-        local current = states[player.UserId]
+        local current = InventoryAuthority.getState(player.UserId)
         if not current then return end
         if not player.Parent then return end
 
@@ -616,7 +703,75 @@ local function handleCheckMag(player: Player, state: InventoryState)
     end)
 end
 
+local function getPrimaryGun(state: InventoryState): Item?
+	local itemId = state.weaponSlots.PrimaryA
+	if not itemId then
+		return nil
+	end
+
+	local item = state.itemsById[itemId]
+	if item and (item.category == "gun" or item.category == "pistol") then
+		return item
+	end
+
+	return nil
+end
+
+local function getLoadTargetGun(state: InventoryState): Item?
+	return getEquippedGun(state) or getPrimaryGun(state)
+end
+
+local function getItemContainerName(state: InventoryState, itemId: string): string?
+	if containerHasItem(state.rig, itemId) then
+		return "rig"
+	end
+
+	if containerHasItem(state.backpack, itemId) then
+		return "backpack"
+	end
+
+	return nil
+end
+
+local function getItemWeaponSlot(state: InventoryState, itemId: string): SlotName?
+	for slotName, slotItemId in pairs(state.weaponSlots) do
+		if slotItemId == itemId then
+			return slotName :: SlotName
+		end
+	end
+
+	return nil
+end
+
+local function removeItemCompletely(state: InventoryState, itemId: string): boolean
+	if removeFromContainer(state.rig, itemId) then
+		state.itemsById[itemId] = nil
+		return true
+	end
+
+	if removeFromContainer(state.backpack, itemId) then
+		state.itemsById[itemId] = nil
+		return true
+	end
+
+	local slotName = getItemWeaponSlot(state, itemId)
+	if slotName then
+		state.weaponSlots[slotName] = nil
+		if state.equippedSlot == slotName then
+			state.equippedSlot = nil
+		end
+		state.itemsById[itemId] = nil
+		return true
+	end
+
+	return false
+end
+
 local function handleUseKeycard(player: Player, state: InventoryState, payload: {[string]: any})
+	if not RaidAuthority.isInRaid(player.UserId) then
+		return
+	end
+
 	if isRateLimited(state, "useKeycard", 0.15) then
 		return
 	end
@@ -640,6 +795,56 @@ local function handleUseKeycard(player: Player, state: InventoryState, payload: 
 	sendSnapshot(player, state)
 end
 
+local function resolveMoveDestinationIndex(container: Container, toIndex: number?): number?
+	if toIndex ~= nil then
+		local requestedIndex = math.floor(toIndex)
+		if requestedIndex < 1 or requestedIndex > container.capacity then
+			return nil
+		end
+
+		if container.itemIds[requestedIndex] ~= nil then
+			return nil
+		end
+
+		return requestedIndex
+	end
+
+	for slotIndex = 1, container.capacity do
+		if container.itemIds[slotIndex] == nil then
+			return slotIndex
+		end
+	end
+
+	return nil
+end
+
+local function loadMagazineIntoGun(state: InventoryState, gun: Item, magItem: Item): boolean
+	local sourceContainerName = getItemContainerName(state, magItem.itemId)
+	if sourceContainerName ~= "rig" then
+		warn("[InventoryService] Load failed: magazine is not in rig")
+		return false
+	end
+
+	if not isCompatibleMag(gun, magItem) then
+		return false
+	end
+
+	local rigIndex = findItemIndex(state.rig, magItem.itemId)
+	if not rigIndex then
+		return false
+	end
+
+	state.rig.itemIds[rigIndex] = nil
+
+	local previousMagId = gun.attachedMagId
+	if previousMagId then
+		state.rig.itemIds[rigIndex] = previousMagId
+	end
+
+	gun.attachedMagId = magItem.itemId
+	return true
+end
+
 local function handleMoveItem(player: Player, state: InventoryState, payload: {[string]: any})
 	if isRateLimited(state, "moveItem", 0.05) then
 		return
@@ -658,7 +863,7 @@ local function handleMoveItem(player: Player, state: InventoryState, payload: {[
 		return
 	end
 
-	if typeof(toIndex) ~= "number" then
+	if toIndex ~= nil and typeof(toIndex) ~= "number" then
 		return
 	end
 
@@ -678,31 +883,21 @@ local function handleMoveItem(player: Player, state: InventoryState, payload: {[
 		return
 	end
 
-	local requestedIndex = math.floor(toIndex)
-	if requestedIndex < 1 then
-		return
-	end
-
 	if fromContainer == toContainer then
-		if requestedIndex > (#toContainer.itemIds + 1) then
+		local originalItemId = fromContainer.itemIds[fromIndex]
+		fromContainer.itemIds[fromIndex] = nil
+		local destinationIndex = resolveMoveDestinationIndex(toContainer, toIndex)
+		if not destinationIndex then
+			fromContainer.itemIds[fromIndex] = originalItemId
 			return
 		end
 
-		table.remove(fromContainer.itemIds, fromIndex)
-
-		local adjustedIndex = requestedIndex
-		if requestedIndex > fromIndex then
-			adjustedIndex -= 1
+		if destinationIndex == fromIndex then
+			fromContainer.itemIds[fromIndex] = originalItemId
+			return
 		end
 
-		if adjustedIndex < 1 then
-			adjustedIndex = 1
-		end
-		if adjustedIndex > (#toContainer.itemIds + 1) then
-			adjustedIndex = #toContainer.itemIds + 1
-		end
-
-		table.insert(toContainer.itemIds, adjustedIndex, itemId)
+		toContainer.itemIds[destinationIndex] = itemId
 		sendSnapshot(player, state)
 		return
 	end
@@ -715,16 +910,217 @@ local function handleMoveItem(player: Player, state: InventoryState, payload: {[
 		return
 	end
 
-	if requestedIndex > (#toContainer.itemIds + 1) then
+	local destinationIndex = resolveMoveDestinationIndex(toContainer, toIndex)
+	if not destinationIndex then
 		return
 	end
 
-	table.remove(fromContainer.itemIds, fromIndex)
-	table.insert(toContainer.itemIds, requestedIndex, itemId)
+	fromContainer.itemIds[fromIndex] = nil
+	toContainer.itemIds[destinationIndex] = itemId
 	sendSnapshot(player, state)
 end
 
+local function createDroppedLootModel(templateId: string): Model?
+	local sharedFolder = ReplicatedStorage:FindFirstChild("Shared")
+	if not sharedFolder then
+		return nil
+	end
+
+	local lootPrefabs = sharedFolder:FindFirstChild("LootPrefabs")
+	if not lootPrefabs then
+		warn("[InventoryService] Drop failed: ReplicatedStorage.Shared.LootPrefabs is missing")
+		return nil
+	end
+
+	local prefab = lootPrefabs:FindFirstChild(templateId)
+	if not prefab then
+		local definition = LootDefinitions.get(templateId)
+		if definition and definition.prefabName then
+			prefab = lootPrefabs:FindFirstChild(definition.prefabName)
+		end
+	end
+
+	if not prefab then
+		for _, child in ipairs(lootPrefabs:GetChildren()) do
+			if child:IsA("Model") and child:GetAttribute("TemplateId") == templateId then
+				prefab = child
+				break
+			end
+		end
+	end
+
+	if not prefab or not prefab:IsA("Model") then
+		warn(string.format("[InventoryService] Drop failed: missing loot prefab for %s", templateId))
+		return nil
+	end
+
+	return prefab:Clone()
+end
+
+local function prepareDroppedLootModel(droppedModel: Model): BasePart?
+	local handle = getLootHandle(droppedModel)
+	if not handle then
+		return nil
+	end
+
+	if not droppedModel.PrimaryPart then
+		droppedModel.PrimaryPart = handle
+	end
+
+	for _, descendant in ipairs(droppedModel:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			if descendant ~= handle then
+				local hasWeld = false
+				for _, child in ipairs(descendant:GetChildren()) do
+					if child:IsA("WeldConstraint") and ((child.Part0 == handle and child.Part1 == descendant) or (child.Part1 == handle and child.Part0 == descendant)) then
+						hasWeld = true
+						break
+					end
+				end
+
+				if not hasWeld then
+					local weld = Instance.new("WeldConstraint")
+					weld.Part0 = handle
+					weld.Part1 = descendant
+					weld.Parent = handle
+				end
+			end
+
+			descendant.Anchored = false
+		end
+	end
+
+	return handle
+end
+
+local function getDroppedLootFolder(): Folder
+	local existing = Workspace:FindFirstChild("DroppedLoot")
+	if existing and existing:IsA("Folder") then
+		return existing
+	end
+
+	local folder = Instance.new("Folder")
+	folder.Name = "DroppedLoot"
+	folder.Parent = Workspace
+	return folder
+end
+
+local function placeDroppedLoot(player: Player, item: Item)
+	local droppedModel = createDroppedLootModel(item.templateId)
+	if not droppedModel then
+		return false
+	end
+
+	local character = player.Character
+	local root = character and getRoot(character)
+	if not root then
+		return false
+	end
+
+	local dropCFrame = root.CFrame * CFrame.new(0, 1, -3)
+	droppedModel:SetAttribute("TemplateId", item.templateId)
+	droppedModel:SetAttribute("WorldItemId", string.format("%s_drop_%d", item.templateId, math.floor(os.clock() * 1000)))
+	applyItemStateToLootModel(droppedModel, item)
+
+	local handle = prepareDroppedLootModel(droppedModel)
+	if not handle then
+		warn(string.format("[InventoryService] Drop failed: prefab %s has no Handle or PrimaryPart", item.templateId))
+		droppedModel:Destroy()
+		return false
+	end
+
+	droppedModel.Parent = getDroppedLootFolder()
+	droppedModel:PivotTo(dropCFrame)
+	return true
+end
+
+local function handleDropItem(player: Player, state: InventoryState, itemId: string)
+	if not RaidAuthority.isInRaid(player.UserId) then
+		return
+	end
+
+	if isRateLimited(state, "dropItem", 0.1) then
+		return
+	end
+
+	if typeof(itemId) ~= "string" then
+		return
+	end
+
+	local item = state.itemsById[itemId]
+	if not item then
+		return
+	end
+
+	if not placeDroppedLoot(player, item) then
+		return
+	end
+
+	if removeItemCompletely(state, itemId) then
+		sendSnapshot(player, state)
+	end
+end
+
+local function handleItemAction(player: Player, state: InventoryState, itemId: string, actionType: string)
+	if not RaidAuthority.isInRaid(player.UserId) then
+		return
+	end
+
+	if isRateLimited(state, "itemAction", 0.1) then
+		return
+	end
+
+	local item = state.itemsById[itemId]
+	if not item then
+		return
+	end
+
+	if actionType == "Load" then
+		if item.category ~= "mag" then
+			return
+		end
+
+		local gun = getLoadTargetGun(state)
+		if not gun then
+			return
+		end
+
+		if loadMagazineIntoGun(state, gun, item) then
+			sendSnapshot(player, state)
+		end
+		return
+	end
+
+	if actionType ~= "Use" then
+		return
+	end
+
+	if item.category == "med" then
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if not humanoid then
+			return
+		end
+
+		humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + 30)
+		if removeItemCompletely(state, itemId) then
+			sendSnapshot(player, state)
+		end
+		return
+	end
+
+	if item.category == "gun" or item.category == "pistol" or item.category == "melee" then
+		local slotName = getItemWeaponSlot(state, itemId)
+		if not slotName then
+			return
+		end
+		state.equippedSlot = slotName
+		sendSnapshot(player, state)
+	end
+end
+
 local function handlePickupLoot(player: Player, state: InventoryState, lootInstance: Instance)
+	if not RaidAuthority.isInRaid(player.UserId) then return end
 	if isRateLimited(state, "pickup", PICKUP_COOLDOWN) then return end
 	if not isAliveCharacter(player.Character) then return end
 
@@ -754,6 +1150,8 @@ local function handlePickupLoot(player: Player, state: InventoryState, lootInsta
 		return
 	end
 
+	applyLootModelStateToItem(lootModel, item)
+
 	if not addItemByCategoryPriority(state, item) then
 		lootedSet[lootModel] = nil
 		lootModel:SetAttribute("PickedUp", false)
@@ -779,8 +1177,6 @@ actionEvent.OnServerEvent:Connect(function(player: Player, payload: any)
         handleReload(player, state)
     elseif kind == "CheckMag" then
         handleCheckMag(player, state)
-    elseif kind == "MoveItem" then
-        handleMoveItem(player, state, payload)
     elseif kind == "UseKeycard" then
         handleUseKeycard(player, state, payload)
     elseif kind == "BindQuick" then
@@ -793,15 +1189,47 @@ pickupEvent.OnServerEvent:Connect(function(player: Player, lootInstance: any)
 	handlePickupLoot(player, state, lootInstance)
 end)
 
+moveItemEvent.OnServerEvent:Connect(function(player: Player, itemId: any, fromContainer: any, toContainer: any, toIndex: any)
+	local state = getOrCreateState(player)
+	handleMoveItem(player, state, {
+		itemId = itemId,
+		fromContainer = fromContainer,
+		toContainer = toContainer,
+		toIndex = toIndex,
+	})
+end)
+
+dropItemEvent.OnServerEvent:Connect(function(player: Player, itemId: any)
+	local state = getOrCreateState(player)
+	handleDropItem(player, state, itemId)
+end)
+
+itemActionEvent.OnServerEvent:Connect(function(player: Player, itemId: any, actionType: any)
+	if typeof(itemId) ~= "string" or typeof(actionType) ~= "string" then
+		return
+	end
+
+	local state = getOrCreateState(player)
+	handleItemAction(player, state, itemId, actionType)
+end)
+
+local function setupPlayer(player: Player)
+	local state = getOrCreateState(player)
+	player.CharacterAdded:Connect(function()
+		state.isReloading = false
+		sendSnapshot(player, state)
+	end)
+	sendSnapshot(player, state)
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+
 Players.PlayerAdded:Connect(function(player)
-    local state = getOrCreateState(player)
-    player.CharacterAdded:Connect(function()
-        state.isReloading = false
-        sendSnapshot(player, state)
-    end)
-    sendSnapshot(player, state)
+	setupPlayer(player)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-    states[player.UserId] = nil
+    InventoryAuthority.removeState(player.UserId)
 end)

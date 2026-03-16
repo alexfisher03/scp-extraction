@@ -11,3 +11,6 @@ pcall(function()
 end)
 
 player:SetAttribute("InventoryVisible", false)
+player:SetAttribute("RaidPhase", "InRaid")
+player:SetAttribute("PlayerCanFight", true)
+player:SetAttribute("BodyLootOpen", false)
