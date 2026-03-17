@@ -7,11 +7,18 @@ local UserInputService = game:GetService("UserInputService")
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local LootDefinitions = require(ReplicatedStorage.Shared.LootDefinitions)
+local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
+local ClientActionBridge = require(script.Parent.state.ClientActionBridge)
 local LootPromptStore = require(script.Parent.state.LootPromptStore)
 local RaidStore = require(script.Parent.state.RaidStore)
 
+if not PlaceConfig.isRaidPlace() then
+	return
+end
+
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
 local remotes = ReplicatedStorage:WaitForChild(Net.RemotesFolderName)
 local pickupEvent = remotes:WaitForChild(Net.LootPickupRequestEventName) :: RemoteEvent
@@ -23,6 +30,7 @@ local DETECTION_INTERVAL = 0.08
 
 local elapsed = 0
 local activeExtractTarget: Model? = nil
+local doorInteractBusy = false
 
 local function getExtractsFolder(): Folder?
 	local maps = workspace:FindFirstChild("Maps")
@@ -56,6 +64,46 @@ local function getModelWithAttribute(instance: Instance?, attributeName: string)
 	return nil
 end
 
+local function getDoorModel(instance: Instance?): Model?
+	local current = instance
+	while current do
+		if current:IsA("Model") and current:FindFirstChild("Door1") and current:FindFirstChild("Door2") then
+			return current
+		end
+		current = current.Parent
+	end
+
+	return nil
+end
+
+local function getDoorInteractPrompt(doorModel: Model): ProximityPrompt?
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local rootPosition = if root and root:IsA("BasePart") then root.Position else nil
+	local bestPrompt: ProximityPrompt? = nil
+	local bestDistance = math.huge
+
+	for _, buttonName in ipairs({ "Button1", "Button2" }) do
+		local button = doorModel:FindFirstChild(buttonName)
+		if button then
+			local prompt = button:FindFirstChildOfClass("ProximityPrompt")
+			if prompt then
+				if rootPosition and button:IsA("BasePart") then
+					local distance = (button.Position - rootPosition).Magnitude
+					if distance < bestDistance then
+						bestDistance = distance
+						bestPrompt = prompt
+					end
+				else
+					return prompt
+				end
+			end
+		end
+	end
+
+	return bestPrompt
+end
+
 local function getCrosshairPromptTarget()
 	local character = player.Character
 	if not character or not camera then
@@ -77,7 +125,8 @@ local function getCrosshairPromptTarget()
 		return {
 			kind = "body",
 			target = bodyModel,
-			text = "LOOT BODY - Press E",
+			text = if isMobile then "LOOT BODY" else "LOOT BODY - Press E",
+			actionText = "Interact",
 		}
 	end
 
@@ -91,7 +140,45 @@ local function getCrosshairPromptTarget()
 				target = lootModel,
 				templateId = templateId,
 				displayName = displayName,
-				text = string.format("%s. Press E", displayName),
+				text = if isMobile
+					then string.format("Pick up %s", displayName)
+					else string.format("%s  Press E", displayName),
+				actionText = if isMobile then nil else "Pick Up",
+			}
+		end
+	end
+
+	local doorModel = getDoorModel(result.Instance)
+	if doorModel then
+		local interactPrompt = getDoorInteractPrompt(doorModel)
+		if interactPrompt then
+			local requiredLevel = doorModel:GetAttribute("RequiredKeyLevel")
+			local unlockedThisRaid = doorModel:GetAttribute("UnlockedThisRaid") == true
+			local lockedAttr = doorModel:GetAttribute("Locked")
+			local isLocked = if typeof(lockedAttr) == "boolean" then lockedAttr else (typeof(requiredLevel) == "number" and requiredLevel > 0)
+			local level = if typeof(requiredLevel) == "number" then math.max(0, math.floor(requiredLevel)) else 0
+
+			local text: string
+			if level > 0 then
+				if isLocked and not unlockedThisRaid then
+					text = if isMobile
+						then string.format("Level %d Locked", level)
+						else string.format("[E] Level %d Locked", level)
+				else
+					text = if isMobile
+						then string.format("Level %d Unlocked", level)
+						else string.format("[E] Level %d Unlocked", level)
+				end
+			else
+				text = if isMobile then "Interact" else "[E] Interact"
+			end
+
+			return {
+				kind = "door",
+				target = doorModel,
+				text = text,
+				actionText = "Interact",
+				promptInstance = interactPrompt,
 			}
 		end
 	end
@@ -160,6 +247,37 @@ local function updatePrompt()
 	LootPromptStore.clear()
 end
 
+local function interactWithCurrentPrompt()
+	if player:GetAttribute("InventoryVisible") == true then
+		return
+	end
+
+	local prompt = LootPromptStore.getPrompt()
+	if not prompt.target or not prompt.kind then
+		return
+	end
+
+	if prompt.kind == "loot" then
+		pickupEvent:FireServer(prompt.target)
+	elseif prompt.kind == "body" then
+		bodyLootOpenEvent:FireServer(prompt.target)
+	elseif prompt.kind == "door" and prompt.promptInstance then
+		if doorInteractBusy then
+			return
+		end
+		doorInteractBusy = true
+		prompt.promptInstance:InputHoldBegin()
+		task.delay(math.max(0.15, prompt.promptInstance.HoldDuration + 0.1), function()
+			if prompt.promptInstance then
+				prompt.promptInstance:InputHoldEnd()
+			end
+			doorInteractBusy = false
+		end)
+	end
+end
+
+ClientActionBridge.register("interact", interactWithCurrentPrompt)
+
 RunService.RenderStepped:Connect(function(deltaTime)
 	elapsed += deltaTime
 	if elapsed < DETECTION_INTERVAL then
@@ -179,14 +297,5 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		return
 	end
 
-	local prompt = LootPromptStore.getPrompt()
-	if not prompt.target or not prompt.kind then
-		return
-	end
-
-	if prompt.kind == "loot" then
-		pickupEvent:FireServer(prompt.target)
-	elseif prompt.kind == "body" then
-		bodyLootOpenEvent:FireServer(prompt.target)
-	end
+	interactWithCurrentPrompt()
 end)

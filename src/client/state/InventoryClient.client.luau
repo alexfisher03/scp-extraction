@@ -6,7 +6,13 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Net = require(ReplicatedStorage.Shared.Net)
+local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
+local ClientActionBridge = require(script.Parent:WaitForChild("ClientActionBridge"))
 local InventoryStore = require(script.Parent:WaitForChild("InventoryStore"))
+
+if not PlaceConfig.isRaidPlace() then
+	return
+end
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -109,6 +115,65 @@ local function setInventoryVisible(visible: boolean)
 	applyInventoryInputMode(visible)
 end
 
+local function sendAction(payload: {[string]: any})
+	actionEvent:FireServer(payload)
+end
+
+local function toggleInventory()
+	if player:GetAttribute("RaidPhase") == "Stash" or player:GetAttribute("BodyLootOpen") == true then
+		setInventoryVisible(true)
+		return
+	end
+
+	local current = player:GetAttribute("InventoryVisible")
+	local nowVisible = not (typeof(current) == "boolean" and current)
+	setInventoryVisible(nowVisible)
+end
+
+local function closeInventory()
+	setInventoryVisible(false)
+end
+
+local function requestEquipSlot(slot: string)
+	if player:GetAttribute("InventoryVisible") == true then
+		return
+	end
+
+	sendAction({ kind = "EquipSlot", slot = slot })
+end
+
+local function requestReload()
+	if player:GetAttribute("InventoryVisible") == true then
+		return
+	end
+
+	sendAction({ kind = "Reload" })
+end
+
+local function requestCheckMag()
+	if player:GetAttribute("InventoryVisible") == true then
+		return
+	end
+
+	sendAction({ kind = "CheckMag" })
+end
+
+local function requestFire()
+	if player:GetAttribute("InventoryVisible") == true then
+		return
+	end
+
+	if camera == nil then
+		return
+	end
+
+	sendAction({
+		kind = "Fire",
+		origin = camera.CFrame.Position,
+		direction = camera.CFrame.LookVector.Unit,
+	})
+end
+
 snapshotEvent.OnClientEvent:Connect(function(snapshot)
 	InventoryStore.setSnapshot(snapshot)
 end)
@@ -122,10 +187,6 @@ player:GetAttributeChangedSignal("InventoryVisible"):Connect(function()
 	applyInventoryInputMode(player:GetAttribute("InventoryVisible") == true)
 end)
 
-local function sendAction(payload: {[string]: any})
-	actionEvent:FireServer(payload)
-end
-
 local slotByKey = {
 	[Enum.KeyCode.One] = "PrimaryA",
 	[Enum.KeyCode.Two] = "PrimaryB",
@@ -133,16 +194,30 @@ local slotByKey = {
 	[Enum.KeyCode.Four] = "Melee",
 }
 
+ClientActionBridge.register("toggle_inventory", toggleInventory)
+ClientActionBridge.register("close_inventory", closeInventory)
+ClientActionBridge.register("reload", requestReload)
+ClientActionBridge.register("check_mag", requestCheckMag)
+ClientActionBridge.register("fire", requestFire)
+ClientActionBridge.register("equip_primary_a", function()
+	requestEquipSlot("PrimaryA")
+end)
+ClientActionBridge.register("equip_primary_b", function()
+	requestEquipSlot("PrimaryB")
+end)
+ClientActionBridge.register("equip_pistol", function()
+	requestEquipSlot("Pistol")
+end)
+ClientActionBridge.register("equip_melee", function()
+	requestEquipSlot("Melee")
+end)
+ClientActionBridge.register("aim", function()
+	-- Aim behavior will be implemented with the later ADS pass.
+end)
+
 UserInputService.InputBegan:Connect(function(input, processed)
 	if input.KeyCode == Enum.KeyCode.Tab then
-		if player:GetAttribute("RaidPhase") == "Stash" or player:GetAttribute("BodyLootOpen") == true then
-			setInventoryVisible(true)
-			return
-		end
-
-		local current = player:GetAttribute("InventoryVisible")
-		local nowVisible = not (typeof(current) == "boolean" and current)
-		setInventoryVisible(nowVisible)
+		toggleInventory()
 		return
 	end
 
@@ -152,30 +227,26 @@ UserInputService.InputBegan:Connect(function(input, processed)
 
 	if input.KeyCode == Enum.KeyCode.R then
 		if UserInputService:GetFocusedTextBox() then return end
-		sendAction({ kind = "Reload" })
+		requestReload()
 		return
 	end
 
 	if input.KeyCode == Enum.KeyCode.C then
 		if UserInputService:GetFocusedTextBox() then return end
-		sendAction({ kind = "CheckMag" })
+		requestCheckMag()
 		return
 	end
 
 	if processed then return end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		sendAction({
-			kind = "Fire",
-			origin = camera.CFrame.Position,
-			direction = camera.CFrame.LookVector.Unit,
-		})
+		requestFire()
 		return
 	end
 
 	local slot = slotByKey[input.KeyCode]
 	if slot then
-		sendAction({ kind = "EquipSlot", slot = slot })
+		requestEquipSlot(slot)
 		return
 	end
 end)

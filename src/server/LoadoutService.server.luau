@@ -1,5 +1,12 @@
 --!strict
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
+
+if not PlaceConfig.isRaidPlace() then
+	return
+end
 
 local function ensureBackpack(player: Player): Backpack
 	return player:WaitForChild("Backpack") :: Backpack
@@ -28,8 +35,20 @@ local function giveLoadout(player: Player)
 	rifle.Parent = backpack
 end
 
-Players.PlayerAdded:Connect(function(player)
+local function setupPlayer(player: Player)
 	player.CharacterAdded:Connect(function(_char)
 		giveLoadout(player)
 	end)
+
+	if player.Character then
+		giveLoadout(player)
+	end
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+
+Players.PlayerAdded:Connect(function(player)
+	setupPlayer(player)
 end)

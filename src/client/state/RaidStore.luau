@@ -4,13 +4,17 @@ local RaidStore = {}
 
 local changed = Instance.new("BindableEvent")
 local state: any = {
-	phase = "InRaid",
+	phase = "LoadingRaid",
+	raidLoadPhase = "InitializingRaid",
 	currentExtractId = nil,
 	extractEndTime = nil,
 	raidEndTime = nil,
-	playerCanFight = true,
+	playerCanFight = false,
 	openBodyId = nil,
 	availableExtracts = {},
+	worldStatus = nil,
+	partyMembers = {},
+	readyDeadline = nil,
 }
 
 function RaidStore.setState(nextState: any)

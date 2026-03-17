@@ -6,8 +6,13 @@ local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local LootDefinitions = require(ReplicatedStorage.Shared.LootDefinitions)
+local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
 local InventoryAuthority = require(script.Parent.inventory.InventoryAuthority)
 local RaidAuthority = require(script.Parent.raid.RaidAuthority)
+
+if not PlaceConfig.isRaidPlace() then
+	return
+end
 
 local remotes = ReplicatedStorage:WaitForChild(Net.RemotesFolderName)
 local actionEvent = remotes:WaitForChild(Net.InventoryActionEventName) :: RemoteEvent
@@ -214,6 +219,58 @@ local function getContainerByName(state: InventoryState, containerName: string):
 	return nil
 end
 
+local function normalizeWeaponSlotName(containerName: string): SlotName?
+	if containerName == "PrimaryA" then
+		return "PrimaryA"
+	end
+	if containerName == "PrimaryB" then
+		return "PrimaryB"
+	end
+	if containerName == "Pistol" then
+		return "Pistol"
+	end
+	if containerName == "Melee" then
+		return "Melee"
+	end
+
+	return nil
+end
+
+local function weaponSlotAcceptsItem(slotName: SlotName, item: Item): boolean
+	if (slotName == "PrimaryA" or slotName == "PrimaryB") and item.category == "gun" then
+		return true
+	end
+	if slotName == "Pistol" and item.category == "pistol" then
+		return true
+	end
+	if slotName == "Melee" and item.category == "melee" then
+		return true
+	end
+
+	return false
+end
+
+local function resolveOpenWeaponSlotName(state: InventoryState, item: Item): SlotName?
+	if item.category == "gun" then
+		if state.weaponSlots.PrimaryA == nil then
+			return "PrimaryA"
+		end
+		if state.weaponSlots.PrimaryB == nil then
+			return "PrimaryB"
+		end
+	end
+
+	if item.category == "pistol" and state.weaponSlots.Pistol == nil then
+		return "Pistol"
+	end
+
+	if item.category == "melee" and state.weaponSlots.Melee == nil then
+		return "Melee"
+	end
+
+	return nil
+end
+
 local function containerAcceptsItem(containerName: string, item: Item): boolean
 	if containerName == "backpack" or containerName == "Backpack" then
 		return true
@@ -221,6 +278,11 @@ local function containerAcceptsItem(containerName: string, item: Item): boolean
 
 	if containerName == "rig" or containerName == "Rig" then
 		return item.category == "mag" or item.category == "med"
+	end
+
+	local slotName = normalizeWeaponSlotName(containerName)
+	if slotName then
+		return weaponSlotAcceptsItem(slotName, item)
 	end
 
 	return false
@@ -872,32 +934,86 @@ local function handleMoveItem(player: Player, state: InventoryState, payload: {[
 		return
 	end
 
-	local fromContainer = getContainerByName(state, fromContainerName)
-	local toContainer = getContainerByName(state, toContainerName)
-	if not fromContainer or not toContainer then
+	local fromSlotName = normalizeWeaponSlotName(fromContainerName)
+	local toSlotName = normalizeWeaponSlotName(toContainerName)
+	local fromContainer = if fromSlotName then nil else getContainerByName(state, fromContainerName)
+	local toContainer = if toSlotName or toContainerName == "OpenWeaponSlot" then nil else getContainerByName(state, toContainerName)
+
+	local fromIndex: number? = nil
+	if fromSlotName then
+		if state.weaponSlots[fromSlotName] ~= itemId then
+			return
+		end
+	else
+		if not fromContainer then
+			return
+		end
+
+		fromIndex = findItemIndex(fromContainer, itemId)
+		if not fromIndex then
+			return
+		end
+	end
+
+	if toContainerName == "OpenWeaponSlot" then
+		toSlotName = resolveOpenWeaponSlotName(state, item)
+		if not toSlotName then
+			return
+		end
+	end
+
+	if toSlotName then
+		if not weaponSlotAcceptsItem(toSlotName, item) then
+			return
+		end
+
+		if state.weaponSlots[toSlotName] ~= nil then
+			return
+		end
+
+		if fromSlotName == toSlotName then
+			return
+		end
+
+		if fromSlotName then
+			state.weaponSlots[fromSlotName] = nil
+			if state.equippedSlot == fromSlotName then
+				state.equippedSlot = nil
+			end
+		elseif fromContainer and fromIndex then
+			fromContainer.itemIds[fromIndex] = nil
+		else
+			return
+		end
+
+		state.weaponSlots[toSlotName] = itemId
+		sendSnapshot(player, state)
 		return
 	end
 
-	local fromIndex = findItemIndex(fromContainer, itemId)
-	if not fromIndex then
+	if not toContainer then
 		return
 	end
 
-	if fromContainer == toContainer then
+	if fromContainer and fromContainer == toContainer then
+		if not fromIndex then
+			return
+		end
+
 		local originalItemId = fromContainer.itemIds[fromIndex]
 		fromContainer.itemIds[fromIndex] = nil
-		local destinationIndex = resolveMoveDestinationIndex(toContainer, toIndex)
-		if not destinationIndex then
+		local sameContainerDestinationIndex = resolveMoveDestinationIndex(toContainer, toIndex)
+		if not sameContainerDestinationIndex then
 			fromContainer.itemIds[fromIndex] = originalItemId
 			return
 		end
 
-		if destinationIndex == fromIndex then
+		if sameContainerDestinationIndex == fromIndex then
 			fromContainer.itemIds[fromIndex] = originalItemId
 			return
 		end
 
-		toContainer.itemIds[destinationIndex] = itemId
+		toContainer.itemIds[sameContainerDestinationIndex] = itemId
 		sendSnapshot(player, state)
 		return
 	end
@@ -915,7 +1031,17 @@ local function handleMoveItem(player: Player, state: InventoryState, payload: {[
 		return
 	end
 
-	fromContainer.itemIds[fromIndex] = nil
+	if fromSlotName then
+		state.weaponSlots[fromSlotName] = nil
+		if state.equippedSlot == fromSlotName then
+			state.equippedSlot = nil
+		end
+	elseif fromContainer and fromIndex then
+		fromContainer.itemIds[fromIndex] = nil
+	else
+		return
+	end
+
 	toContainer.itemIds[destinationIndex] = itemId
 	sendSnapshot(player, state)
 end

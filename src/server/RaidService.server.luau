@@ -6,12 +6,18 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage.Shared.Net)
+local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
 local InventoryAuthority = require(script.Parent.inventory.InventoryAuthority)
 local RaidAuthority = require(script.Parent.raid.RaidAuthority)
+
+if not PlaceConfig.isRaidPlace() then
+	return
+end
 
 local remotes = ReplicatedStorage:WaitForChild(Net.RemotesFolderName)
 local extractRequestEvent = remotes:WaitForChild(Net.ExtractRequestStartEventName) :: RemoteEvent
 local raidStateEvent = remotes:WaitForChild(Net.RaidStateEventName) :: RemoteEvent
+local raidReadyRequestEvent = remotes:WaitForChild(Net.RaidReadyRequestEventName) :: RemoteEvent
 local bodyLootOpenEvent = remotes:WaitForChild(Net.BodyLootOpenRequestEventName) :: RemoteEvent
 local bodyLootCloseEvent = remotes:WaitForChild(Net.BodyLootCloseRequestEventName) :: RemoteEvent
 local bodyLootTransferEvent = remotes:WaitForChild(Net.BodyLootTransferRequestEventName) :: RemoteEvent
@@ -21,15 +27,20 @@ local EXTRACT_TICK = 0.1
 local DEFAULT_EXTRACT_TIME = 5
 local BODY_OPEN_DISTANCE = 12
 local RAID_DURATION_SECONDS = 20 * 60
+local READY_TIMEOUT_SECONDS = 20
 
 type RaidState = {
 	phase: string,
+	raidLoadPhase: string?,
 	currentExtractId: string?,
 	extractEndTime: number?,
 	raidEndTime: number?,
 	playerCanFight: boolean,
 	openBodyId: string?,
 	availableExtracts: {string}?,
+	worldStatus: string?,
+	partyMembers: {any}?,
+	readyDeadline: number?,
 }
 
 type BodyState = {
@@ -42,8 +53,53 @@ type BodyState = {
 }
 
 local extractionTokensByUserId: {[number]: number} = {}
-local raidEndTime = Workspace:GetServerTimeNow() + RAID_DURATION_SECONDS
 local lastExtractScanAt = 0
+local raidEndTime: number? = nil
+local readyDeadline: number? = nil
+local raidStarted = false
+local raidCloseScheduled = false
+local expectedPartyUserIds: {number} = {}
+local expectedPartySet: {[number]: boolean} = {}
+local readyByUserId: {[number]: boolean} = {}
+local lastKnownPositionsByUserId: {[number]: Vector3} = {}
+local closeRaid = function() end
+local emitRaidStateWithSharedFields = function(_player: Player, _raidState: RaidState) end
+local refreshRaidStatesForAllPlayers = function() end
+local startRaidForAll = function() end
+
+local function setLoadPhase(player: Player, raidState: RaidState, loadPhase: string)
+	raidState.raidLoadPhase = loadPhase
+	emitRaidStateWithSharedFields(player, raidState)
+end
+
+local function getWorldStatus(): string?
+	local maps = Workspace:FindFirstChild("Maps")
+	if not maps then
+		return "World missing: Workspace.Maps"
+	end
+
+	local level0 = maps:FindFirstChild("Level0")
+	if not level0 then
+		return "World missing: Workspace.Maps.Level0"
+	end
+
+	local gameplay = level0:FindFirstChild("Gameplay")
+	if not gameplay then
+		return "World missing: Workspace.Maps.Level0.Gameplay"
+	end
+
+	local spawns = gameplay:FindFirstChild("Spawns")
+	if not spawns then
+		return "World missing: Workspace.Maps.Level0.Gameplay.Spawns"
+	end
+
+	local extracts = gameplay:FindFirstChild("Extracts")
+	if not extracts then
+		return "World missing: Workspace.Maps.Level0.Gameplay.Extracts"
+	end
+
+	return "World loaded: Workspace.Maps.Level0"
+end
 
 local function cloneArray<T>(arr: {T}): {T}
 	local out = table.create(#arr)
@@ -62,6 +118,19 @@ local function cloneItems(itemsById: {[string]: any}): {[string]: any}
 		end
 		out[itemId] = copy
 	end
+	return out
+end
+
+local function clonePartyMembers(partyMembers: {any}?): {any}
+	local out = {}
+	if not partyMembers then
+		return out
+	end
+
+	for index, member in ipairs(partyMembers) do
+		out[index] = table.clone(member)
+	end
+
 	return out
 end
 
@@ -88,9 +157,13 @@ local function sendRaidState(player: Player, raidState: RaidState)
 	player:SetAttribute("RaidPhase", raidState.phase)
 	player:SetAttribute("PlayerCanFight", raidState.playerCanFight)
 	player:SetAttribute("OpenBodyLootId", raidState.openBodyId)
+	player:SetAttribute("RaidWorldStatus", raidState.worldStatus)
 	local payload = table.clone(raidState)
 	if raidState.availableExtracts then
 		payload.availableExtracts = cloneArray(raidState.availableExtracts)
+	end
+	if raidState.partyMembers then
+		payload.partyMembers = clonePartyMembers(raidState.partyMembers)
 	end
 	raidStateEvent:FireClient(player, payload)
 end
@@ -108,6 +181,19 @@ local function getRoot(character: Model?): BasePart?
 	end
 
 	return character:FindFirstChild("HumanoidRootPart") :: BasePart?
+end
+
+local function getCharacterPosition(character: Model?): Vector3?
+	local root = getRoot(character)
+	if root then
+		return root.Position
+	end
+
+	if character then
+		return character:GetPivot().Position
+	end
+
+	return nil
 end
 
 local function getLobbySpawn(): BasePart?
@@ -164,6 +250,113 @@ local function getAvailableExtracts(): {string}
 
 	table.sort(out)
 	return out
+end
+
+local function mergeExpectedPartyUserIds(userIds: {any}?)
+	if typeof(userIds) ~= "table" then
+		return
+	end
+
+	for _, userId in ipairs(userIds) do
+		if typeof(userId) == "number" and not expectedPartySet[userId] then
+			expectedPartySet[userId] = true
+			table.insert(expectedPartyUserIds, userId)
+		end
+	end
+end
+
+local function getExpectedPartyUserIds(): {number}
+	if #expectedPartyUserIds > 0 then
+		return expectedPartyUserIds
+	end
+
+	local fallback = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		table.insert(fallback, player.UserId)
+	end
+	table.sort(fallback)
+	return fallback
+end
+
+local function getConnectedPartyPlayers(): {Player}
+	local playersInParty = {}
+	local expected = getExpectedPartyUserIds()
+	local expectedSet: {[number]: boolean} = {}
+	for _, userId in ipairs(expected) do
+		expectedSet[userId] = true
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if expectedSet[player.UserId] then
+			table.insert(playersInParty, player)
+		end
+	end
+
+	return playersInParty
+end
+
+local function allExpectedPlayersPresent(): boolean
+	local expected = getExpectedPartyUserIds()
+	if #expected == 0 then
+		return false
+	end
+
+	for _, userId in ipairs(expected) do
+		if Players:GetPlayerByUserId(userId) == nil then
+			return false
+		end
+	end
+
+	return true
+end
+
+local function allExpectedPlayersReady(): boolean
+	local expected = getExpectedPartyUserIds()
+	if #expected == 0 then
+		return false
+	end
+
+	for _, userId in ipairs(expected) do
+		if readyByUserId[userId] ~= true then
+			return false
+		end
+	end
+
+	return true
+end
+
+local function buildPartyMembers(): {any}
+	local members = {}
+	for _, userId in ipairs(getExpectedPartyUserIds()) do
+		local partyPlayer = Players:GetPlayerByUserId(userId)
+		table.insert(members, {
+			userId = userId,
+			name = if partyPlayer then partyPlayer.DisplayName else ("Player " .. tostring(userId)),
+			present = partyPlayer ~= nil,
+			ready = readyByUserId[userId] == true,
+		})
+	end
+	return members
+end
+
+local function populateSharedRaidFields(raidState: RaidState)
+	raidState.raidEndTime = raidEndTime
+	raidState.availableExtracts = getAvailableExtracts()
+	raidState.worldStatus = getWorldStatus()
+	raidState.partyMembers = buildPartyMembers()
+	raidState.readyDeadline = readyDeadline
+end
+
+emitRaidStateWithSharedFields = function(player: Player, raidState: RaidState)
+	populateSharedRaidFields(raidState)
+	RaidAuthority.emitRaidState(player, raidState)
+end
+
+refreshRaidStatesForAllPlayers = function()
+	for _, player in ipairs(getConnectedPartyPlayers()) do
+		local raidState = RaidAuthority.getOrCreateState(player.UserId)
+		emitRaidStateWithSharedFields(player, raidState)
+	end
 end
 
 local function isInsideZone(handle: BasePart, worldPosition: Vector3): boolean
@@ -248,6 +441,18 @@ local function playerContainerAcceptsItem(containerName: string, item: any): boo
 		return item.category == "mag" or item.category == "med"
 	end
 
+	if (containerName == "PrimaryA" or containerName == "PrimaryB") and item.category == "gun" then
+		return true
+	end
+
+	if containerName == "Pistol" and item.category == "pistol" then
+		return true
+	end
+
+	if containerName == "Melee" and item.category == "melee" then
+		return true
+	end
+
 	return false
 end
 
@@ -263,11 +468,33 @@ local function getPlayerContainer(state: any, containerName: string): any?
 	return nil
 end
 
+local function resolveOpenWeaponSlotName(state: any, item: any): string?
+	if item.category == "gun" then
+		if state.weaponSlots.PrimaryA == nil then
+			return "PrimaryA"
+		end
+		if state.weaponSlots.PrimaryB == nil then
+			return "PrimaryB"
+		end
+	end
+
+	if item.category == "pistol" and state.weaponSlots.Pistol == nil then
+		return "Pistol"
+	end
+
+	if item.category == "melee" and state.weaponSlots.Melee == nil then
+		return "Melee"
+	end
+
+	return nil
+end
+
 local function setPhase(player: Player, raidState: RaidState, phase: string)
 	raidState.phase = phase
 	raidState.playerCanFight = phase == "InRaid"
-	raidState.raidEndTime = raidEndTime
-	raidState.availableExtracts = getAvailableExtracts()
+	if phase == "InRaid" and raidState.raidLoadPhase == nil then
+		raidState.raidLoadPhase = "InitializingRaid"
+	end
 	if phase ~= "Extracting" then
 		raidState.currentExtractId = nil
 		raidState.extractEndTime = nil
@@ -275,13 +502,42 @@ local function setPhase(player: Player, raidState: RaidState, phase: string)
 	if phase ~= "InRaid" then
 		raidState.openBodyId = nil
 	end
-	RaidAuthority.emitRaidState(player, raidState)
+	emitRaidStateWithSharedFields(player, raidState)
+end
+
+startRaidForAll = function()
+	if raidStarted then
+		return
+	end
+
+	local partyPlayers = getConnectedPartyPlayers()
+	if #partyPlayers == 0 then
+		return
+	end
+
+	raidStarted = true
+	readyDeadline = nil
+	raidEndTime = Workspace:GetServerTimeNow() + RAID_DURATION_SECONDS
+
+	for _, player in ipairs(partyPlayers) do
+		readyByUserId[player.UserId] = true
+		local raidState = RaidAuthority.getOrCreateState(player.UserId)
+		raidState.raidLoadPhase = "RaidStarted"
+		setPhase(player, raidState, "InRaid")
+	end
+
+	if not raidCloseScheduled then
+		raidCloseScheduled = true
+		task.delay(RAID_DURATION_SECONDS, function()
+			closeRaid()
+		end)
+	end
 end
 
 local function closeBodyLoot(player: Player, raidState: RaidState)
 	if raidState.openBodyId ~= nil then
 		raidState.openBodyId = nil
-		RaidAuthority.emitRaidState(player, raidState)
+		emitRaidStateWithSharedFields(player, raidState)
 	end
 	RaidAuthority.emitBodySnapshot(player, nil)
 end
@@ -568,9 +824,8 @@ local function handleExtractRequest(player: Player, extractInstance: Instance)
 	raidState.currentExtractId = extractModel:GetAttribute("ExtractId") or extractModel.Name
 	raidState.extractEndTime = Workspace:GetServerTimeNow() + (extractModel:GetAttribute("ExtractTime") or DEFAULT_EXTRACT_TIME)
 	raidState.raidEndTime = raidEndTime
-	raidState.availableExtracts = getAvailableExtracts()
 	closeBodyLoot(player, raidState)
-	RaidAuthority.emitRaidState(player, raidState)
+	emitRaidStateWithSharedFields(player, raidState)
 	startExtractionLoop(player, raidState, extractModel)
 end
 
@@ -604,7 +859,7 @@ local function resolveBodyOpen(player: Player, bodyInstance: Instance)
 	end
 
 	raidState.openBodyId = bodyState.bodyId
-	RaidAuthority.emitRaidState(player, raidState)
+	emitRaidStateWithSharedFields(player, raidState)
 	RaidAuthority.emitBodySnapshot(player, bodyState)
 end
 
@@ -636,25 +891,31 @@ local function handleBodyTransfer(player: Player, bodyId: string, itemId: string
 	end
 
 	local destination = getPlayerContainer(inventoryState, toContainerName)
-	if not destination then
-		return
-	end
+	local destinationIndex: number? = nil
+	local destinationWeaponSlot = if toContainerName == "OpenWeaponSlot" then resolveOpenWeaponSlotName(inventoryState, item) else nil
 
-	if not playerContainerAcceptsItem(toContainerName, item) then
-		return
-	end
+	if destinationWeaponSlot then
+		if inventoryState.weaponSlots[destinationWeaponSlot] ~= nil then
+			return
+		end
+	elseif destination then
+		if not playerContainerAcceptsItem(toContainerName, item) then
+			return
+		end
 
-	local destinationIndex: number?
-	if toIndex ~= nil then
-		local requestedIndex = math.floor(toIndex)
-		if requestedIndex >= 1 and requestedIndex <= destination.capacity and destination.itemIds[requestedIndex] == nil then
-			destinationIndex = requestedIndex
+		if toIndex ~= nil then
+			local requestedIndex = math.floor(toIndex)
+			if requestedIndex >= 1 and requestedIndex <= destination.capacity and destination.itemIds[requestedIndex] == nil then
+				destinationIndex = requestedIndex
+			end
+		else
+			destinationIndex = getFirstEmptySlot(destination.itemIds, destination.capacity)
+		end
+
+		if not destinationIndex then
+			return
 		end
 	else
-		destinationIndex = getFirstEmptySlot(destination.itemIds, destination.capacity)
-	end
-
-	if not destinationIndex then
 		return
 	end
 
@@ -666,7 +927,11 @@ local function handleBodyTransfer(player: Player, bodyId: string, itemId: string
 		return
 	end
 
-	destination.itemIds[destinationIndex] = newItemId
+	if destinationWeaponSlot then
+		inventoryState.weaponSlots[destinationWeaponSlot] = newItemId
+	else
+		destination.itemIds[destinationIndex :: number] = newItemId
+	end
 	for sourceItemId in pairs(remap) do
 		bodyState.itemsById[sourceItemId] = nil
 	end
@@ -677,6 +942,34 @@ end
 local function handleBodyLootClose(player: Player)
 	local raidState = RaidAuthority.getOrCreateState(player.UserId)
 	closeBodyLoot(player, raidState)
+end
+
+local function handleRaidReady(player: Player)
+	local raidState = RaidAuthority.getOrCreateState(player.UserId)
+	if raidStarted or raidState.phase == "Stash" then
+		return
+	end
+
+	readyByUserId[player.UserId] = true
+	if readyDeadline == nil then
+		readyDeadline = Workspace:GetServerTimeNow() + READY_TIMEOUT_SECONDS
+	end
+
+	if raidState.phase ~= "WaitingForPlayers" then
+		raidState.phase = "WaitingForPlayers"
+		raidState.playerCanFight = false
+		raidState.currentExtractId = nil
+		raidState.extractEndTime = nil
+		raidState.openBodyId = nil
+		raidState.raidLoadPhase = "WaitingForPartyReady"
+	end
+
+	if allExpectedPlayersPresent() and allExpectedPlayersReady() then
+		startRaidForAll()
+		return
+	end
+
+	refreshRaidStatesForAllPlayers()
 end
 
 local function handleCharacterDied(player: Player, character: Model)
@@ -709,6 +1002,28 @@ local function handleCharacterDied(player: Player, character: Model)
 	end)
 end
 
+local function handlePlayerLeavingRaid(player: Player)
+	local raidState = RaidAuthority.getState(player.UserId)
+	local inventoryState = InventoryAuthority.getState(player.UserId)
+	if not raidState or not inventoryState then
+		return
+	end
+
+	if raidState.phase == "Stash" then
+		return
+	end
+
+	local characterPosition = getCharacterPosition(player.Character) or lastKnownPositionsByUserId[player.UserId]
+	if characterPosition then
+		local bodyState = buildBodyStateFromInventory(player, inventoryState, characterPosition)
+		if bodyState then
+			RaidAuthority.setBody(bodyState.bodyId, bodyState)
+		end
+	end
+
+	clearInventoryForLoss(inventoryState)
+end
+
 local function bindCharacter(player: Player, character: Model)
 	local humanoid = character:WaitForChild("Humanoid") :: Humanoid
 	humanoid.Died:Connect(function()
@@ -717,26 +1032,43 @@ local function bindCharacter(player: Player, character: Model)
 end
 
 local function setupPlayer(player: Player)
+	local joinData = player:GetJoinData()
+	local teleportData = joinData.TeleportData
+	if typeof(teleportData) == "table" then
+		mergeExpectedPartyUserIds(teleportData.partyUserIds)
+	end
+	if #expectedPartyUserIds == 0 then
+		mergeExpectedPartyUserIds({ player.UserId })
+	end
+
 	local raidState = RaidAuthority.getOrCreateState(player.UserId)
+	raidState.phase = if raidStarted then "InRaid" else "LoadingRaid"
+	raidState.playerCanFight = raidStarted
 	raidState.raidEndTime = raidEndTime
-	raidState.availableExtracts = getAvailableExtracts()
-	RaidAuthority.emitRaidState(player, raidState)
+	raidState.raidLoadPhase = "WaitingForInitialCharacter"
+	emitRaidStateWithSharedFields(player, raidState)
 	RaidAuthority.emitBodySnapshot(player, nil)
 
 	player.CharacterAdded:Connect(function(character)
+		local loadingState = RaidAuthority.getOrCreateState(player.UserId)
+		setLoadPhase(player, loadingState, "CharacterReplicated")
+
 		bindCharacter(player, character)
 		local currentState = RaidAuthority.getOrCreateState(player.UserId)
-		currentState.raidEndTime = raidEndTime
-		currentState.availableExtracts = getAvailableExtracts()
-		RaidAuthority.emitRaidState(player, currentState)
+		currentState.raidLoadPhase = "CharacterBound"
+		emitRaidStateWithSharedFields(player, currentState)
 	end)
 
 	if player.Character then
+		raidState.raidLoadPhase = "CharacterAlreadyPresent"
+		emitRaidStateWithSharedFields(player, raidState)
 		bindCharacter(player, player.Character)
 	end
+
+	refreshRaidStatesForAllPlayers()
 end
 
-function closeRaid()
+closeRaid = function()
 	local bodyFolder = Workspace:FindFirstChild("RaidBodies")
 	if bodyFolder then
 		for _, child in ipairs(bodyFolder:GetChildren()) do
@@ -755,6 +1087,10 @@ extractRequestEvent.OnServerEvent:Connect(function(player: Player, extractInstan
 	end
 
 	handleExtractRequest(player, extractInstance)
+end)
+
+raidReadyRequestEvent.OnServerEvent:Connect(function(player: Player)
+	handleRaidReady(player)
 end)
 
 bodyLootOpenEvent.OnServerEvent:Connect(function(player: Player, bodyInstance: any)
@@ -790,7 +1126,13 @@ Players.PlayerAdded:Connect(function(player)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
+	handlePlayerLeavingRaid(player)
+	readyByUserId[player.UserId] = nil
+	lastKnownPositionsByUserId[player.UserId] = nil
 	RaidAuthority.removeState(player.UserId)
+	if not raidStarted then
+		refreshRaidStatesForAllPlayers()
+	end
 end)
 
 RunService.Heartbeat:Connect(function()
@@ -800,9 +1142,15 @@ RunService.Heartbeat:Connect(function()
 	end
 
 	lastExtractScanAt = now
+	if not raidStarted and readyDeadline ~= nil and now >= readyDeadline and #getConnectedPartyPlayers() > 0 then
+		startRaidForAll()
+	end
+
 	for _, player in ipairs(Players:GetPlayers()) do
+		local root = getRoot(player.Character)
+		if root then
+			lastKnownPositionsByUserId[player.UserId] = root.Position
+		end
 		tryAutoStartExtraction(player)
 	end
 end)
-
-task.delay(RAID_DURATION_SECONDS, closeRaid)

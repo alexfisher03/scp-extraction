@@ -8,6 +8,8 @@ export type PromptState = {
 	templateId: string?,
 	displayName: string?,
 	text: string?,
+	actionText: string?,
+	promptInstance: ProximityPrompt?,
 }
 
 local changed = Instance.new("BindableEvent")
@@ -17,6 +19,8 @@ local state: PromptState = {
 	templateId = nil,
 	displayName = nil,
 	text = nil,
+	actionText = nil,
+	promptInstance = nil,
 }
 
 function LootPromptStore.setPrompt(nextState: PromptState)
@@ -31,6 +35,8 @@ function LootPromptStore.clear()
 		templateId = nil,
 		displayName = nil,
 		text = nil,
+		actionText = nil,
+		promptInstance = nil,
 	})
 end
 

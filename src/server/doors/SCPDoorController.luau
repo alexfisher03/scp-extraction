@@ -202,6 +202,8 @@ function SCPDoorController.bind(doorModel: Model)
 			end
 			local pp = btn:FindFirstChildOfClass("ProximityPrompt")
 			if pp then
+				-- Hide the native prompt UI and let the custom crosshair prompt own presentation.
+				pp.Style = Enum.ProximityPromptStyle.Custom
 				pp.Triggered:Connect(function(plr)
 					tryToggle(plr, btn)
 				end)

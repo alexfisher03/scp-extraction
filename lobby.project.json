@@ -28,10 +28,6 @@
           "$path": "src/client"
         }
       }
-    },
-
-    "Workspace": {
-      "$className": "Workspace"
     }
   }
 }

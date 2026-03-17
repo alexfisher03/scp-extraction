@@ -4,12 +4,16 @@ local RaidAuthority = {}
 
 type RaidState = {
 	phase: string,
+	raidLoadPhase: string?,
 	currentExtractId: string?,
 	extractEndTime: number?,
 	raidEndTime: number?,
 	playerCanFight: boolean,
 	openBodyId: string?,
 	availableExtracts: {string}?,
+	worldStatus: string?,
+	partyMembers: {any}?,
+	readyDeadline: number?,
 }
 
 type BodyState = {
@@ -30,13 +34,17 @@ local bodySnapshotEmitter: ((Player, BodyState?) -> ())? = nil
 
 function RaidAuthority.getDefaultState(): RaidState
 	return {
-		phase = "InRaid",
+		phase = "LoadingRaid",
+		raidLoadPhase = "InitializingRaid",
 		currentExtractId = nil,
 		extractEndTime = nil,
 		raidEndTime = nil,
-		playerCanFight = true,
+		playerCanFight = false,
 		openBodyId = nil,
 		availableExtracts = {},
+		worldStatus = nil,
+		partyMembers = {},
+		readyDeadline = nil,
 	}
 end
 
