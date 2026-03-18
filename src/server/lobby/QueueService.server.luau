@@ -9,6 +9,7 @@ local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
+local LobbySessionService = require(script.Parent.LobbySessionService)
 
 if not PlaceConfig.isLobbyPlace() then
 	return
@@ -206,7 +207,18 @@ local function startMatch(entryCount: number)
 		partyUserIds = partyUserIds,
 		createdAt = Workspace:GetServerTimeNow(),
 		loadoutSeed = {},
+		inventorySnapshotsByUserId = {},
+		preRaidInventorySnapshotsByUserId = {},
 	}
+
+	for _, queuedPlayer in ipairs(playersToTeleport) do
+		local inventorySnapshot = LobbySessionService.getInventorySnapshot(queuedPlayer.UserId)
+		LobbySessionService.setPreRaidInventorySnapshot(queuedPlayer.UserId, inventorySnapshot)
+		if inventorySnapshot ~= nil then
+			teleportData.inventorySnapshotsByUserId[tostring(queuedPlayer.UserId)] = inventorySnapshot
+			teleportData.preRaidInventorySnapshotsByUserId[tostring(queuedPlayer.UserId)] = inventorySnapshot
+		end
+	end
 
 	notifyPlayers(playersToTeleport, "Loading into raid...")
 

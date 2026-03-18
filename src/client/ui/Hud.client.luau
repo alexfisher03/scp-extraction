@@ -17,7 +17,7 @@ local LootPromptStore = require(script.Parent.Parent.state.LootPromptStore)
 local RaidStore = require(script.Parent.Parent.state.RaidStore)
 local BodyLootStore = require(script.Parent.Parent.state.BodyLootStore)
 
-if not PlaceConfig.isRaidPlace() then
+if not (PlaceConfig.isRaidPlace() or PlaceConfig.isLobbyPlace()) then
 	return
 end
 
@@ -157,6 +157,10 @@ local function useLootPrompt()
 end
 
 local function useRaidState()
+	if PlaceConfig.isLobbyPlace() then
+		return nil
+	end
+
 	local raidState, setRaidState = React.useState(RaidStore.getState())
 
 	React.useEffect(function()
@@ -232,6 +236,10 @@ local function useViewportSize()
 end
 
 local function useRaidLoadingOverlay(raidState: any, snapshot: any)
+	if PlaceConfig.isLobbyPlace() then
+		return 1, "", "", false, "|", {}, false
+	end
+
 	local overlayTransparency, setOverlayTransparency = React.useState(0)
 	local overlayText, setOverlayText = React.useState("Joining raid...")
 	local overlayDetailText, setOverlayDetailText = React.useState("Establishing connection to the raid server.")
@@ -344,6 +352,18 @@ local function useRaidLoadingOverlay(raidState: any, snapshot: any)
 				updateStage("Joining raid...")
 				setChecklist(buildChecklist(1, 0))
 				return false, "Joining raid...", "Waiting for the raid server to send initial state."
+			end
+
+			if raidState.phase == "LeavingRaid" then
+				updateStage("Leaving raid...")
+				setChecklist(buildChecklist(8, 8))
+				return false, "Leaving raid...", "Finalizing raid result and returning you to the lobby."
+			end
+
+			if raidState.phase == "WaitingForPlayers" then
+				updateStage("Deploying into action...")
+				setChecklist(buildChecklist(8, 8))
+				return false, "Deploying into action...", "Synchronizing your deployment and waiting for all players to be ready."
 			end
 
 			if raidState.phase == "InRaid" and raidState.playerCanFight == true then
@@ -1139,6 +1159,8 @@ local function HudApp()
 	local health, maxHealth = useHumanoidHealth()
 	local now = useServerNow()
 	local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	local isRaidPlace = PlaceConfig.isRaidPlace()
+	local isLobbyPlace = PlaceConfig.isLobbyPlace()
 	local viewportSize = useViewportSize()
 	local snapshot = useSnapshot()
 	local inventoryVisible = useInventoryVisible()
@@ -1161,12 +1183,13 @@ local function HudApp()
 		and typeof(raidState.raidEndTime) == "number"
 		and (raidState.phase == "InRaid" or raidState.phase == "Extracting")
 		and not isRaidLoading
-	local canShowMobileRaidButtons = isMobile
+	local canShowMobileRaidButtons = isMobile and isRaidPlace
 		and not isRaidLoading
 		and raidState ~= nil
 		and (raidState.phase == "InRaid" or raidState.phase == "Extracting")
-	local shouldRenderLoadingOverlay = (isRaidLoading or loadingOverlayTransparency < 0.98)
+	local shouldRenderLoadingOverlay = (isRaidLoading or isWaitingForPlayers or loadingOverlayTransparency < 0.98)
 		and not (raidState and raidState.phase == "InRaid" and raidState.playerCanFight == true)
+	local isLeavingRaid = raidState ~= nil and raidState.phase == "LeavingRaid"
 
 	local hpText = string.format("HP %d/%d", math.floor(health + 0.5), math.floor(maxHealth + 0.5))
 
@@ -1347,8 +1370,10 @@ local function HudApp()
 	end
 
 	local raidTimerText = "Raid --:--"
+	local raidTimerRemaining = nil :: number?
 	if raidState and typeof(raidState.raidEndTime) == "number" then
-		raidTimerText = "Raid " .. formatClock(raidState.raidEndTime - now)
+		raidTimerRemaining = math.max(0, raidState.raidEndTime - now)
+		raidTimerText = "Raid " .. formatClock(raidTimerRemaining)
 	end
 
 	local mobileInventoryPages = if isMobile and bodyLootSnapshot
@@ -1408,6 +1433,10 @@ local function HudApp()
 	local function itemCanUseAction(item: any, source: SelectedItemSource?): boolean
 		if not item or not source then
 			return false
+		end
+
+		if isLobbyPlace then
+			return item.category == "gun" or item.category == "pistol" or item.category == "melee"
 		end
 
 		if item.category == "med" then
@@ -1499,13 +1528,15 @@ local function HudApp()
 				})
 			end
 
-			table.insert(menuActions, {
-				label = "Drop",
-				run = function()
-					sendDropItemRequest(selectedItemId)
-					closeContextMenu()
-				end,
-			})
+			if isRaidPlace then
+				table.insert(menuActions, {
+					label = "Drop",
+					run = function()
+						sendDropItemRequest(selectedItemId)
+						closeContextMenu()
+					end,
+				})
+			end
 		end
 	end
 	local contextMenuChildren: {[string]: any} = {
@@ -1539,7 +1570,7 @@ local function HudApp()
 	end
 	local contextMenuHeight = 16 + (#menuActions * (if isMobile then 38 else 32))
 
-	if not inventoryVisible then
+	if not inventoryVisible and isRaidPlace then
 		local hotbarSlotSize = if isMobile then 46 else 56
 		local hotbarPadding = if isMobile then 6 else 8
 		local barChildren: {[string]: any} = {
@@ -1584,14 +1615,14 @@ local function HudApp()
 
 		rootChildren.Health = React.createElement("TextLabel", {
 			AnchorPoint = Vector2.new(0, 1),
-			Position = UDim2.new(0, 16, 1, -16),
-			Size = UDim2.fromOffset(if isMobile then 154 else 240, if isMobile then 34 else 36),
+			Position = UDim2.new(0, 16, 1, if isMobile then -12 else -16),
+			Size = UDim2.fromOffset(if isMobile then 142 else 240, if isMobile then 32 else 36),
 			BackgroundTransparency = 0.45,
 			BackgroundColor3 = Color3.fromRGB(18, 18, 18),
 			BorderSizePixel = 0,
 			Text = hpText,
 			Font = Enum.Font.GothamBold,
-			TextSize = if isMobile then 13 else 14,
+			TextSize = if isMobile then 12 else 14,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextColor3 = Color3.new(1, 1, 1),
 		}, {
@@ -1604,19 +1635,19 @@ local function HudApp()
 
 		rootChildren.Ammo = React.createElement("TextLabel", {
 			AnchorPoint = Vector2.new(0, 1),
-			Position = UDim2.new(0, 16, 1, if isMobile then -48 else -56),
-			Size = UDim2.fromOffset(if isMobile then 172 else 240, 32),
+			Position = UDim2.new(0, 16, 1, if isMobile then -40 else -56),
+			Size = UDim2.fromOffset(if isMobile then 160 else 240, 32),
 			BackgroundTransparency = 1,
 			Text = ammoText,
 			Font = Enum.Font.Gotham,
-			TextSize = if isMobile then 12 else 13,
+			TextSize = if isMobile then 11 else 13,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextColor3 = Color3.fromRGB(220, 220, 220),
 		})
 
 		rootChildren.ReloadStatus = React.createElement("TextLabel", {
 			AnchorPoint = Vector2.new(0, 1),
-			Position = UDim2.new(0, 16, 1, if isMobile then -72 else -80),
+			Position = UDim2.new(0, 16, 1, if isMobile then -60 else -80),
 			Size = UDim2.fromOffset(if isMobile then 200 else 260, 22),
 			BackgroundTransparency = 1,
 			Text = if snapshot and snapshot.isReloading
@@ -1625,7 +1656,7 @@ local function HudApp()
 				then timedCheckMagText
 				else "",
 			Font = Enum.Font.GothamBold,
-			TextSize = 13,
+			TextSize = if isMobile then 11 else 13,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextColor3 = Color3.fromRGB(255, 210, 120),
 		})
@@ -1640,17 +1671,18 @@ local function HudApp()
 		}, barChildren)
 
 		if shouldShowRaidTimer then
+			local timerUrgent = raidTimerRemaining ~= nil and raidTimerRemaining <= 180
 			rootChildren.RaidTimerButton = React.createElement("TextButton", {
 				AnchorPoint = Vector2.new(1, 0),
 				Position = UDim2.new(1, -16, 0, 16),
 				Size = UDim2.fromOffset(180, 38),
 				BackgroundTransparency = 0.2,
-				BackgroundColor3 = Color3.fromRGB(18, 18, 18),
+				BackgroundColor3 = if timerUrgent then Color3.fromRGB(48, 16, 16) else Color3.fromRGB(18, 18, 18),
 				BorderSizePixel = 0,
 				Text = raidTimerText,
 				Font = Enum.Font.GothamBold,
 				TextSize = 16,
-				TextColor3 = Color3.new(1, 1, 1),
+				TextColor3 = if timerUrgent then Color3.fromRGB(255, 140, 140) else Color3.new(1, 1, 1),
 				[React.Event.Activated] = function()
 					setExtractsVisible(function(previous)
 						return not previous
@@ -1661,7 +1693,7 @@ local function HudApp()
 				Stroke = React.createElement("UIStroke", {
 					Thickness = 1,
 					Transparency = 0.15,
-					Color = Color3.fromRGB(255, 225, 130),
+					Color = if timerUrgent then Color3.fromRGB(255, 110, 110) else Color3.fromRGB(255, 225, 130),
 				}),
 			})
 
@@ -1691,8 +1723,8 @@ local function HudApp()
 
 				rootChildren.ExtractList = React.createElement("Frame", {
 					AnchorPoint = if isMobile then Vector2.new(0.5, 0) else Vector2.new(1, 0),
-					Position = if isMobile then UDim2.new(0.5, 0, 0, 62) else UDim2.new(1, -16, 0, 60),
-					Size = UDim2.fromOffset(if isMobile then 148 else 220, if isMobile then 94 else math.max(80, 22 + #availableExtracts * 26)),
+					Position = if isMobile then UDim2.new(0.5, 0, 0, 50) else UDim2.new(1, -16, 0, 60),
+					Size = UDim2.fromOffset(if isMobile then 136 else 220, if isMobile then 82 else math.max(80, 22 + #availableExtracts * 26)),
 					BackgroundTransparency = 0.1,
 					BackgroundColor3 = Color3.fromRGB(18, 18, 18),
 					BorderSizePixel = 0,
@@ -1709,7 +1741,7 @@ local function HudApp()
 						BackgroundTransparency = 1,
 						Text = "Open Extracts",
 						Font = Enum.Font.GothamBold,
-						TextSize = if isMobile then 12 else 14,
+						TextSize = if isMobile then 11 else 14,
 						TextColor3 = Color3.fromRGB(255, 225, 130),
 						TextXAlignment = Enum.TextXAlignment.Left,
 					}),
@@ -1793,7 +1825,7 @@ local function HudApp()
 			})
 		end
 
-	else
+	elseif inventoryVisible then
 		local inventoryPanel = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = if isMobile then UDim2.fromScale(0.56, 0.5) else UDim2.fromScale(0.53, 0.5),
@@ -2034,7 +2066,7 @@ local function HudApp()
 		})
 	end
 
-	if isMobile and not inventoryVisible and not isRaidLoading and not isWaitingForPlayers and bodyLootSnapshot == nil and (raidState == nil or raidState.phase ~= "Stash") then
+	if isMobile and isRaidPlace and not inventoryVisible and not isRaidLoading and not isWaitingForPlayers and bodyLootSnapshot == nil and (raidState == nil or raidState.phase ~= "Stash") then
 		rootChildren.MobileUtilityToggle = mobileActionButton(
 			if mobileUtilityOpen then "Close" else "Menu",
 			UDim2.new(0, 16, 1, -88),
@@ -2111,7 +2143,7 @@ local function HudApp()
 
 	end
 
-	if isWaitingForPlayers and not isRaidLoading then
+	if isWaitingForPlayers then
 		local partyMembers = if raidState and raidState.partyMembers then raidState.partyMembers else {}
 		local readyDeadlineText = "Waiting for other players..."
 		if raidState and typeof(raidState.readyDeadline) == "number" then
@@ -2153,54 +2185,55 @@ local function HudApp()
 			Position = UDim2.fromOffset(0, 0),
 			Size = UDim2.fromScale(1, 1),
 			BackgroundColor3 = Color3.new(0, 0, 0),
-			BackgroundTransparency = 0.08,
+			BackgroundTransparency = if isMobile then 0 else 0.08,
 			BorderSizePixel = 0,
 			ZIndex = 60,
 		}, {
 			Title = React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.42),
-				Size = UDim2.fromOffset(520, 40),
+				Position = UDim2.fromScale(0.5, if isMobile then 0.38 else 0.42),
+				Size = UDim2.fromOffset(if isMobile then math.min(320, viewportSize.X - 32) else 520, 40),
 				BackgroundTransparency = 1,
 				Text = "PLAYER READY",
 				Font = Enum.Font.GothamBold,
-				TextSize = 28,
+				TextSize = if isMobile then 22 else 28,
 				TextColor3 = Color3.fromRGB(255, 225, 130),
 				ZIndex = 61,
 			}),
 			Detail = React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.47),
-				Size = UDim2.fromOffset(760, 30),
+				Position = UDim2.fromScale(0.5, if isMobile then 0.44 else 0.47),
+				Size = UDim2.fromOffset(if isMobile then math.min(340, viewportSize.X - 24) else 760, if isMobile then 42 else 30),
 				BackgroundTransparency = 1,
 				Text = readyDeadlineText,
 				Font = Enum.Font.Gotham,
-				TextSize = 16,
+				TextSize = if isMobile then 14 else 16,
+				TextWrapped = isMobile,
 				TextColor3 = Color3.fromRGB(200, 200, 200),
 				ZIndex = 61,
 			}),
 			ReadyList = React.createElement("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0),
-				Position = UDim2.fromScale(0.5, 0.54),
-				Size = UDim2.fromOffset(520, math.max(120, #partyMembers * 30)),
+				Position = UDim2.fromScale(0.5, if isMobile then 0.52 else 0.54),
+				Size = UDim2.fromOffset(if isMobile then math.min(320, viewportSize.X - 28) else 520, math.max(if isMobile then 112 else 120, #partyMembers * (if isMobile then 26 else 30))),
 				BackgroundTransparency = 1,
 				ZIndex = 61,
 			}, readyListChildren),
 		})
 	end
 
-	if shouldRenderLoadingOverlay then
+	if shouldRenderLoadingOverlay or isLeavingRaid then
 		rootChildren.LoadingOverlay = React.createElement("Frame", {
 			Position = UDim2.fromOffset(0, 0),
 			Size = UDim2.fromScale(1, 1),
 			BackgroundColor3 = Color3.new(0, 0, 0),
-			BackgroundTransparency = loadingOverlayTransparency,
+			BackgroundTransparency = if isLeavingRaid then 0 else loadingOverlayTransparency,
 			BorderSizePixel = 0,
 			ZIndex = 50,
 		}, {
 			Label = React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, if isMobile then 0.28 else 0.52),
+				Position = UDim2.fromScale(0.5, if isMobile then 0.24 else 0.52),
 				Size = UDim2.fromOffset(if isMobile then math.min(320, viewportSize.X - 36) else 560, if isMobile then 26 else 34),
 				BackgroundTransparency = 1,
 				Text = loadingOverlayText,
@@ -2211,7 +2244,7 @@ local function HudApp()
 			}),
 			Detail = React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, if isMobile then 0.35 else 0.56),
+				Position = UDim2.fromScale(0.5, if isMobile then 0.31 else 0.56),
 				Size = UDim2.fromOffset(if isMobile then math.min(340, viewportSize.X - 30) else 700, if isMobile then 42 else 28),
 				BackgroundTransparency = 1,
 				Text = loadingOverlayDetailText,
@@ -2221,9 +2254,9 @@ local function HudApp()
 				TextColor3 = Color3.fromRGB(180, 180, 180),
 				ZIndex = 51,
 			}),
-			Spinner = React.createElement("TextLabel", {
+			Spinner = if not isLeavingRaid then React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, if isMobile then 0.46 else 0.62),
+				Position = UDim2.fromScale(0.5, if isMobile then 0.40 else 0.62),
 				Size = UDim2.fromOffset(80, 40),
 				BackgroundTransparency = 1,
 				Text = loadingSpinnerFrame,
@@ -2231,10 +2264,10 @@ local function HudApp()
 				TextSize = if isMobile then 30 else 34,
 				TextColor3 = Color3.fromRGB(255, 225, 130),
 				ZIndex = 51,
-			}),
-			StepList = React.createElement("Frame", {
+			}) else nil,
+			StepList = if not isLeavingRaid then React.createElement("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0),
-				Position = UDim2.fromScale(0.5, if isMobile then 0.54 else 0.68),
+				Position = UDim2.fromScale(0.5, if isMobile then 0.46 else 0.68),
 				Size = UDim2.fromOffset(if isMobile then math.min(300, viewportSize.X - 42) else 520, if isMobile then math.min(128, math.max(106, viewportSize.Y * 0.18)) else 170),
 				BackgroundTransparency = 1,
 				ZIndex = 51,
@@ -2252,7 +2285,7 @@ local function HudApp()
 				Step6 = loadingStepLabel(loadingChecklist[6], 6, loadingActiveMarkerVisible, isMobile),
 				Step7 = loadingStepLabel(loadingChecklist[7], 7, loadingActiveMarkerVisible, isMobile),
 				Step8 = loadingStepLabel(loadingChecklist[8], 8, loadingActiveMarkerVisible, isMobile),
-			}),
+			}) else nil,
 		})
 	end
 

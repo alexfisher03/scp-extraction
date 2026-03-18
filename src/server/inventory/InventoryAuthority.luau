@@ -4,6 +4,7 @@ local InventoryAuthority = {}
 
 local statesByUserId: {[number]: any} = {}
 local snapshotEmitter: ((Player, any) -> ())? = nil
+local snapshotSerializer: ((any) -> any)? = nil
 
 function InventoryAuthority.getState(userId: number): any
 	return statesByUserId[userId]
@@ -25,6 +26,18 @@ function InventoryAuthority.emitSnapshot(player: Player, state: any)
 	if snapshotEmitter then
 		snapshotEmitter(player, state)
 	end
+end
+
+function InventoryAuthority.setSnapshotSerializer(serializer: (any) -> any)
+	snapshotSerializer = serializer
+end
+
+function InventoryAuthority.serializeState(state: any): any
+	if snapshotSerializer then
+		return snapshotSerializer(state)
+	end
+
+	return nil
 end
 
 return InventoryAuthority

@@ -3,10 +3,12 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TeleportService = game:GetService("TeleportService")
 local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
+local RaidResult = require(ReplicatedStorage.Shared.RaidResult)
 local InventoryAuthority = require(script.Parent.inventory.InventoryAuthority)
 local RaidAuthority = require(script.Parent.raid.RaidAuthority)
 
@@ -26,7 +28,7 @@ local bodyLootSnapshotEvent = remotes:WaitForChild(Net.BodyLootSnapshotEventName
 local EXTRACT_TICK = 0.1
 local DEFAULT_EXTRACT_TIME = 5
 local BODY_OPEN_DISTANCE = 12
-local RAID_DURATION_SECONDS = 20 * 60
+local RAID_DURATION_SECONDS = 2 * 60
 local READY_TIMEOUT_SECONDS = 20
 
 type RaidState = {
@@ -62,6 +64,10 @@ local expectedPartyUserIds: {number} = {}
 local expectedPartySet: {[number]: boolean} = {}
 local readyByUserId: {[number]: boolean} = {}
 local lastKnownPositionsByUserId: {[number]: Vector3} = {}
+local killCountByUserId: {[number]: number} = {}
+local eliminationLogByUserId: {[number]: {string}} = {}
+local endedPlayersByUserId: {[number]: boolean} = {}
+local raidTerminalResolved = false
 local closeRaid = function() end
 local emitRaidStateWithSharedFields = function(_player: Player, _raidState: RaidState) end
 local refreshRaidStatesForAllPlayers = function() end
@@ -191,23 +197,6 @@ local function getCharacterPosition(character: Model?): Vector3?
 
 	if character then
 		return character:GetPivot().Position
-	end
-
-	return nil
-end
-
-local function getLobbySpawn(): BasePart?
-	local maps = Workspace:FindFirstChild("Maps")
-	local level0 = maps and maps:FindFirstChild("Level0")
-	local gameplay = level0 and level0:FindFirstChild("Gameplay")
-	local spawns = gameplay and gameplay:FindFirstChild("Spawns")
-	if not spawns then
-		return nil
-	end
-
-	local lobby = spawns:FindFirstChild("placehold_lobby")
-	if lobby and lobby:IsA("BasePart") then
-		return lobby
 	end
 
 	return nil
@@ -516,6 +505,7 @@ startRaidForAll = function()
 	end
 
 	raidStarted = true
+	raidTerminalResolved = false
 	readyDeadline = nil
 	raidEndTime = Workspace:GetServerTimeNow() + RAID_DURATION_SECONDS
 
@@ -571,6 +561,49 @@ local function markInventoryItemsLocation(state: any, locationState: string)
 	for _, item in pairs(state.itemsById) do
 		item.locationState = locationState
 	end
+end
+
+local function freezePlayerForRaidEnd(player: Player)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = getRoot(character)
+	if humanoid then
+		humanoid.WalkSpeed = 0
+		humanoid.JumpPower = 0
+		humanoid.AutoRotate = false
+	end
+	if root then
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	end
+end
+
+local function getKillCount(userId: number): number
+	return killCountByUserId[userId] or 0
+end
+
+local function getEliminationLog(userId: number): {string}
+	local source = eliminationLogByUserId[userId]
+	local cloned = {}
+	if not source then
+		return cloned
+	end
+
+	for index, entry in ipairs(source) do
+		cloned[index] = entry
+	end
+
+	return cloned
+end
+
+local function awardKill(attackerUserId: number, victimPlayer: Player)
+	killCountByUserId[attackerUserId] = (killCountByUserId[attackerUserId] or 0) + 1
+	local log = eliminationLogByUserId[attackerUserId]
+	if not log then
+		log = {}
+		eliminationLogByUserId[attackerUserId] = log
+	end
+	table.insert(log, victimPlayer.DisplayName)
 end
 
 local function collectBodyItemIds(inventoryState: any): {string}
@@ -711,28 +744,77 @@ local function clearInventoryForLoss(inventoryState: any)
 	inventoryState.lastCheckMagSeq = (inventoryState.lastCheckMagSeq or 0) + 1
 end
 
-local function teleportCharacterToLobby(player: Player)
-	local lobbySpawn = getLobbySpawn()
-	local root = getRoot(player.Character)
-	if not lobbySpawn or not root then
+local function buildRaidResultPayload(player: Player, status: string, inventorySnapshot: any, reason: string?): {[string]: any}
+	local joinData = player:GetJoinData()
+	local teleportData = joinData.TeleportData
+	local preRaidInventorySnapshot = nil
+	if typeof(teleportData) == "table" and typeof(teleportData.preRaidInventorySnapshotsByUserId) == "table" then
+		preRaidInventorySnapshot = teleportData.preRaidInventorySnapshotsByUserId[tostring(player.UserId)]
+	end
+
+	return {
+		status = status,
+		xpEarned = 0,
+		kills = getKillCount(player.UserId),
+		eliminations = getEliminationLog(player.UserId),
+		inventorySnapshot = inventorySnapshot,
+		preRaidInventorySnapshot = preRaidInventorySnapshot,
+		raidEndedAt = Workspace:GetServerTimeNow(),
+		reason = reason,
+	}
+end
+
+local function teleportToLobbyWithRaidResult(player: Player, payload: {[string]: any})
+	if PlaceConfig.LOBBY_PLACE_ID == 0 then
+		player:Kick("Lobby place is not configured")
 		return
 	end
 
-	player.Character:PivotTo(lobbySpawn.CFrame + Vector3.new(0, 3, 0))
-	root.AssemblyLinearVelocity = Vector3.zero
-	root.AssemblyAngularVelocity = Vector3.zero
+	local teleportOptions = Instance.new("TeleportOptions")
+	teleportOptions:SetTeleportData({
+		raidResult = payload,
+	})
+
+	local ok, err = pcall(function()
+		TeleportService:TeleportAsync(PlaceConfig.LOBBY_PLACE_ID, { player }, teleportOptions)
+	end)
+
+	if not ok then
+		warn(string.format("[RaidService] Failed to teleport %s to lobby after raid end: %s", player.Name, tostring(err)))
+	end
+end
+
+local function endRaidForPlayer(player: Player, status: string, inventorySnapshot: any, reason: string?)
+	if endedPlayersByUserId[player.UserId] then
+		return
+	end
+
+	endedPlayersByUserId[player.UserId] = true
+	local raidState = RaidAuthority.getOrCreateState(player.UserId)
+	raidState.phase = "LeavingRaid"
+	raidState.playerCanFight = false
+	raidState.currentExtractId = nil
+	raidState.extractEndTime = nil
+	raidState.openBodyId = nil
+	emitRaidStateWithSharedFields(player, raidState)
+	freezePlayerForRaidEnd(player)
+
+	local payload = buildRaidResultPayload(player, status, inventorySnapshot, reason)
+	print(string.format("RAID_END player=%s status=%s kills=%d", player.Name, status, payload.kills))
+	teleportToLobbyWithRaidResult(player, payload)
 end
 
 local function finalizeExtraction(player: Player, raidState: RaidState)
 	local inventoryState = InventoryAuthority.getState(player.UserId)
+	local inventorySnapshot = nil
 	if inventoryState then
 		markInventoryItemsLocation(inventoryState, "stashed")
 		InventoryAuthority.emitSnapshot(player, inventoryState)
+		inventorySnapshot = InventoryAuthority.serializeState(inventoryState)
 	end
 
 	closeBodyLoot(player, raidState)
-	setPhase(player, raidState, "Stash")
-	teleportCharacterToLobby(player)
+	endRaidForPlayer(player, RaidResult.Status.EXTRACTED, inventorySnapshot, "Extracted")
 end
 
 local function cancelExtraction(player: Player, raidState: RaidState)
@@ -946,7 +1028,7 @@ end
 
 local function handleRaidReady(player: Player)
 	local raidState = RaidAuthority.getOrCreateState(player.UserId)
-	if raidStarted or raidState.phase == "Stash" then
+	if raidStarted or endedPlayersByUserId[player.UserId] then
 		return
 	end
 
@@ -974,14 +1056,20 @@ end
 
 local function handleCharacterDied(player: Player, character: Model)
 	local raidState = RaidAuthority.getOrCreateState(player.UserId)
-	if raidState.phase == "Stash" then
+	if endedPlayersByUserId[player.UserId] then
 		return
 	end
 
 	local root = getRoot(character)
 	local inventoryState = InventoryAuthority.getState(player.UserId)
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local attackerUserId = humanoid and humanoid:GetAttribute("LastDamagedByUserId") or nil
+	if typeof(attackerUserId) == "number" and attackerUserId ~= player.UserId then
+		awardKill(attackerUserId, player)
+	end
+
 	if not root or not inventoryState then
-		setPhase(player, raidState, "Stash")
+		endRaidForPlayer(player, RaidResult.Status.KIA, nil, "Killed in raid")
 		return
 	end
 
@@ -993,23 +1081,21 @@ local function handleCharacterDied(player: Player, character: Model)
 	clearInventoryForLoss(inventoryState)
 	InventoryAuthority.emitSnapshot(player, inventoryState)
 	closeBodyLoot(player, raidState)
-	setPhase(player, raidState, "Stash")
-
-	task.delay(1.0, function()
-		if player.Parent then
-			player:LoadCharacter()
-		end
-	end)
+	endRaidForPlayer(player, RaidResult.Status.KIA, nil, "Killed in raid")
 end
 
 local function handlePlayerLeavingRaid(player: Player)
+	if endedPlayersByUserId[player.UserId] then
+		return
+	end
+
 	local raidState = RaidAuthority.getState(player.UserId)
 	local inventoryState = InventoryAuthority.getState(player.UserId)
 	if not raidState or not inventoryState then
 		return
 	end
 
-	if raidState.phase == "Stash" then
+	if raidState.phase == "LeavingRaid" then
 		return
 	end
 
@@ -1022,6 +1108,25 @@ local function handlePlayerLeavingRaid(player: Player)
 	end
 
 	clearInventoryForLoss(inventoryState)
+end
+
+local function handleTimerExpiry()
+	if raidTerminalResolved or raidEndTime == nil then
+		return
+	end
+
+	raidTerminalResolved = true
+	for _, player in ipairs(Players:GetPlayers()) do
+		local raidState = RaidAuthority.getState(player.UserId)
+		if raidState and not endedPlayersByUserId[player.UserId] and raidState.phase ~= "LeavingRaid" then
+			closeBodyLoot(player, raidState)
+			endRaidForPlayer(player, RaidResult.Status.MIA, nil, "Raid timer expired")
+		end
+	end
+
+	task.delay(5, function()
+		closeRaid()
+	end)
 end
 
 local function bindCharacter(player: Player, character: Model)
@@ -1050,6 +1155,15 @@ local function setupPlayer(player: Player)
 	RaidAuthority.emitBodySnapshot(player, nil)
 
 	player.CharacterAdded:Connect(function(character)
+		if endedPlayersByUserId[player.UserId] then
+			task.defer(function()
+				if character.Parent then
+					character:Destroy()
+				end
+			end)
+			return
+		end
+
 		local loadingState = RaidAuthority.getOrCreateState(player.UserId)
 		setLoadPhase(player, loadingState, "CharacterReplicated")
 
@@ -1144,6 +1258,10 @@ RunService.Heartbeat:Connect(function()
 	lastExtractScanAt = now
 	if not raidStarted and readyDeadline ~= nil and now >= readyDeadline and #getConnectedPartyPlayers() > 0 then
 		startRaidForAll()
+	end
+	if raidStarted and raidEndTime ~= nil and now >= raidEndTime then
+		handleTimerExpiry()
+		return
 	end
 
 	for _, player in ipairs(Players:GetPlayers()) do

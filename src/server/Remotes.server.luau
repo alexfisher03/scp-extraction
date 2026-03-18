@@ -40,5 +40,6 @@ ensureRemote(Net.LobbyLeaveQueueEventName)
 ensureRemote(Net.LobbyDevForceStartEventName)
 ensureRemote(Net.LobbyQueueStatusEventName)
 ensureRemote(Net.LobbyNoticeEventName)
+ensureRemote(Net.LobbyPostRaidContinueEventName)
 
 return folder

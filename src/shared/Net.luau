@@ -20,4 +20,5 @@ return {
 	LobbyDevForceStartEventName = "Lobby_DevForceStart",
 	LobbyQueueStatusEventName = "Lobby_QueueStatus",
 	LobbyNoticeEventName = "Lobby_Notice",
+	LobbyPostRaidContinueEventName = "Lobby_PostRaidContinue",
 }

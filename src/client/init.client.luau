@@ -24,6 +24,13 @@ local function getControls()
 end
 
 local function resetGameplayInputMode()
+	if player:GetAttribute("LobbyPostRaidOpen") == true
+		or player:GetAttribute("LobbyTerminalOpen") == true
+		or player:GetAttribute("InventoryVisible") == true
+	then
+		return
+	end
+
 	player.CameraMode = Enum.CameraMode.LockFirstPerson
 	UserInputService.MouseIconEnabled = false
 	UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter

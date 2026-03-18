@@ -10,7 +10,7 @@ local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
 local ClientActionBridge = require(script.Parent:WaitForChild("ClientActionBridge"))
 local InventoryStore = require(script.Parent:WaitForChild("InventoryStore"))
 
-if not PlaceConfig.isRaidPlace() then
+if not (PlaceConfig.isRaidPlace() or PlaceConfig.isLobbyPlace()) then
 	return
 end
 
@@ -120,6 +120,13 @@ local function sendAction(payload: {[string]: any})
 end
 
 local function toggleInventory()
+	if PlaceConfig.isLobbyPlace() then
+		local current = player:GetAttribute("InventoryVisible")
+		local nowVisible = not (typeof(current) == "boolean" and current)
+		setInventoryVisible(nowVisible)
+		return
+	end
+
 	if player:GetAttribute("RaidPhase") == "Stash" or player:GetAttribute("BodyLootOpen") == true then
 		setInventoryVisible(true)
 		return
@@ -135,6 +142,11 @@ local function closeInventory()
 end
 
 local function requestEquipSlot(slot: string)
+	if PlaceConfig.isLobbyPlace() then
+		sendAction({ kind = "EquipSlot", slot = slot })
+		return
+	end
+
 	if player:GetAttribute("InventoryVisible") == true then
 		return
 	end
@@ -143,6 +155,10 @@ local function requestEquipSlot(slot: string)
 end
 
 local function requestReload()
+	if PlaceConfig.isLobbyPlace() then
+		return
+	end
+
 	if player:GetAttribute("InventoryVisible") == true then
 		return
 	end
@@ -151,6 +167,10 @@ local function requestReload()
 end
 
 local function requestCheckMag()
+	if PlaceConfig.isLobbyPlace() then
+		return
+	end
+
 	if player:GetAttribute("InventoryVisible") == true then
 		return
 	end
@@ -159,6 +179,10 @@ local function requestCheckMag()
 end
 
 local function requestFire()
+	if PlaceConfig.isLobbyPlace() then
+		return
+	end
+
 	if player:GetAttribute("InventoryVisible") == true then
 		return
 	end
@@ -180,6 +204,9 @@ end)
 
 if typeof(player:GetAttribute("InventoryVisible")) ~= "boolean" then
 	player:SetAttribute("InventoryVisible", false)
+end
+if PlaceConfig.isLobbyPlace() and typeof(player:GetAttribute("RaidPhase")) ~= "string" then
+	player:SetAttribute("RaidPhase", "Lobby")
 end
 applyInventoryInputMode(player:GetAttribute("InventoryVisible") == true)
 

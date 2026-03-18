@@ -13,6 +13,8 @@ local ReactRoblox = require(Packages:WaitForChild("ReactRoblox"))
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
+local ClientActionBridge = require(script.Parent.state.ClientActionBridge)
+local InventoryStore = require(script.Parent.state.InventoryStore)
 
 print("[LobbyClient] Booting", game.PlaceId, "isLobby=", PlaceConfig.isLobbyPlace(), "hasLobbyFolder=", workspace:FindFirstChild("Lobby") ~= nil)
 
@@ -38,7 +40,7 @@ local terminalCameraConn: RBXScriptConnection? = nil
 local terminalCameraStart: CFrame? = nil
 local terminalAnchorStartPosition: Vector3? = nil
 local PROMPT_PART_ACTIVATION_DISTANCE = 10
-local QUEUE_CANCEL_HOLD_SECONDS = 3
+local QUEUE_CANCEL_HOLD_SECONDS = 2
 
 local function getControls()
 	if controls then
@@ -177,7 +179,57 @@ local function canOpenViaPromptPart(): boolean
 	return (root.Position - promptPart.Position).Magnitude <= PROMPT_PART_ACTIVATION_DISTANCE
 end
 
+local function useInventorySnapshot()
+	local snapshot, setSnapshot = React.useState(InventoryStore.getSnapshot())
+
+	React.useEffect(function()
+		local connection = InventoryStore.changedSignal():Connect(function(nextSnapshot)
+			setSnapshot(nextSnapshot)
+		end)
+
+		return function()
+			connection:Disconnect()
+		end
+	end, {})
+
+	return snapshot
+end
+
+local function lobbyItemLabel(snapshot: any, itemId: string?): string
+	if not snapshot or not itemId or itemId == "" then
+		return "[Empty]"
+	end
+
+	local item = snapshot.itemsById and snapshot.itemsById[itemId] or nil
+	if not item then
+		return tostring(itemId)
+	end
+
+	if typeof(item.templateId) == "string" then
+		return item.templateId
+	end
+
+	return tostring(itemId)
+end
+
+local function countContainerItems(containerData: any): number
+	if typeof(containerData) ~= "table" or typeof(containerData.capacity) ~= "number" then
+		return 0
+	end
+
+	local count = 0
+	for slotIndex = 1, containerData.capacity do
+		local itemId = containerData.itemIds and containerData.itemIds[slotIndex] or nil
+		if typeof(itemId) == "string" and itemId ~= "" then
+			count += 1
+		end
+	end
+
+	return count
+end
+
 local function LobbyApp()
+	local inventorySnapshot = useInventorySnapshot()
 	local queueStatus, setQueueStatus = React.useState({
 		position = nil,
 		count = 0,
@@ -231,7 +283,7 @@ local function LobbyApp()
 				promptConn:Disconnect()
 			end
 			promptConn = prompt.Triggered:Connect(function()
-				if matchStarting then
+				if matchStarting or player:GetAttribute("LobbyPostRaidOpen") == true then
 					return
 				end
 				print("[LobbyClient] Deploy prompt triggered")
@@ -265,7 +317,12 @@ local function LobbyApp()
 			end
 		end)
 		local inputConn = UserInputService.InputBegan:Connect(function(input, processed)
-			if not open and not loadingIntoRaid and input.KeyCode == Enum.KeyCode.E and canOpenViaPromptPart() then
+			if not open
+				and not loadingIntoRaid
+				and player:GetAttribute("LobbyPostRaidOpen") ~= true
+				and input.KeyCode == Enum.KeyCode.E
+				and canOpenViaPromptPart()
+			then
 				print("[LobbyClient] Opened via PromptPart fallback")
 				setOpen(true)
 				setTerminalOpen(true)
@@ -280,7 +337,7 @@ local function LobbyApp()
 				and input.KeyCode == Enum.KeyCode.C
 				and not UserInputService:GetFocusedTextBox()
 			then
-				queueCancelStartedAtRef.current = os.clock()
+				queueCancelStartedAtRef.current = time()
 				queueCancelCompletedRef.current = false
 				queueCancelHeldRef.current = true
 				setQueueCancelHeld(true)
@@ -313,7 +370,11 @@ local function LobbyApp()
 			end
 		end)
 		local promptHintConn = RunService.RenderStepped:Connect(function()
-			local isAvailable = not open and not loadingIntoRaid and not matchStarting and canOpenViaPromptPart()
+			local isAvailable = not open
+				and not loadingIntoRaid
+				and not matchStarting
+				and player:GetAttribute("LobbyPostRaidOpen") ~= true
+				and canOpenViaPromptPart()
 			if isMobile then
 				setMobileDeployAvailable(isAvailable)
 				setDesktopDeployAvailable(false)
@@ -332,7 +393,7 @@ local function LobbyApp()
 					return
 				end
 
-				local progress = math.clamp((os.clock() - queueCancelStartedAtRef.current) / QUEUE_CANCEL_HOLD_SECONDS, 0, 1)
+				local progress = math.clamp((time() - queueCancelStartedAtRef.current) / QUEUE_CANCEL_HOLD_SECONDS, 0, 1)
 				setQueueCancelProgress(progress)
 				if progress >= 1 and not queueCancelCompletedRef.current then
 					queueCancelCompletedRef.current = true
@@ -526,6 +587,110 @@ local function LobbyApp()
 				Stroke = React.createElement("UIStroke", {
 					Thickness = 1,
 					Transparency = 0.1,
+					Color = Color3.fromRGB(255, 225, 130),
+				}),
+			}) else nil,
+			LoadoutPreview = if inventorySnapshot and not isMobile then React.createElement("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0, 16),
+				Size = UDim2.fromOffset(420, 92),
+				BackgroundColor3 = Color3.fromRGB(16, 16, 16),
+				BackgroundTransparency = 0.12,
+				BorderSizePixel = 0,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
+				Stroke = React.createElement("UIStroke", {
+					Thickness = 1,
+					Transparency = 0.15,
+					Color = Color3.fromRGB(255, 225, 130),
+				}),
+				Title = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(12, 8),
+					Size = UDim2.new(1, -24, 0, 16),
+					BackgroundTransparency = 1,
+					Text = "CURRENT LOADOUT",
+					Font = Enum.Font.GothamBold,
+					TextSize = 12,
+					TextColor3 = Color3.fromRGB(255, 225, 130),
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				PrimaryA = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(12, 28),
+					Size = UDim2.new(0.48, -6, 0, 18),
+					BackgroundTransparency = 1,
+					Text = "1 " .. lobbyItemLabel(inventorySnapshot, inventorySnapshot.weaponSlots and inventorySnapshot.weaponSlots.PrimaryA or nil),
+					Font = Enum.Font.Code,
+					TextSize = 11,
+					TextColor3 = Color3.new(1, 1, 1),
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				PrimaryB = React.createElement("TextLabel", {
+					Position = UDim2.new(0.52, 0, 0, 28),
+					Size = UDim2.new(0.48, -12, 0, 18),
+					BackgroundTransparency = 1,
+					Text = "2 " .. lobbyItemLabel(inventorySnapshot, inventorySnapshot.weaponSlots and inventorySnapshot.weaponSlots.PrimaryB or nil),
+					Font = Enum.Font.Code,
+					TextSize = 11,
+					TextColor3 = Color3.new(1, 1, 1),
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Pistol = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(12, 48),
+					Size = UDim2.new(0.48, -6, 0, 18),
+					BackgroundTransparency = 1,
+					Text = "3 " .. lobbyItemLabel(inventorySnapshot, inventorySnapshot.weaponSlots and inventorySnapshot.weaponSlots.Pistol or nil),
+					Font = Enum.Font.Code,
+					TextSize = 11,
+					TextColor3 = Color3.new(1, 1, 1),
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Melee = React.createElement("TextLabel", {
+					Position = UDim2.new(0.52, 0, 0, 48),
+					Size = UDim2.new(0.48, -12, 0, 18),
+					BackgroundTransparency = 1,
+					Text = "4 " .. lobbyItemLabel(inventorySnapshot, inventorySnapshot.weaponSlots and inventorySnapshot.weaponSlots.Melee or nil),
+					Font = Enum.Font.Code,
+					TextSize = 11,
+					TextColor3 = Color3.new(1, 1, 1),
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Counts = React.createElement("TextLabel", {
+					AnchorPoint = Vector2.new(1, 1),
+					Position = UDim2.new(1, -12, 1, -8),
+					Size = UDim2.new(1, -24, 0, 16),
+					BackgroundTransparency = 1,
+					Text = string.format(
+						"Rig %d/%d  Backpack %d/%d",
+						countContainerItems(inventorySnapshot.rig),
+						(inventorySnapshot.rig and inventorySnapshot.rig.capacity) or 0,
+						countContainerItems(inventorySnapshot.backpack),
+						(inventorySnapshot.backpack and inventorySnapshot.backpack.capacity) or 0
+					),
+					Font = Enum.Font.Code,
+					TextSize = 11,
+					TextColor3 = Color3.fromRGB(220, 220, 220),
+					TextXAlignment = Enum.TextXAlignment.Right,
+				}),
+			}) else nil,
+			InventoryButton = if player:GetAttribute("LobbyPostRaidOpen") ~= true then React.createElement("TextButton", {
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -16, 0, if queueStatus.queued then (if isMobile then 118 else 154) else 16),
+				Size = UDim2.fromOffset(if isMobile then 92 else 110, 34),
+				BackgroundColor3 = Color3.fromRGB(16, 16, 16),
+				BackgroundTransparency = 0.12,
+				BorderSizePixel = 0,
+				Text = "Inventory",
+				Font = Enum.Font.GothamBold,
+				TextSize = if isMobile then 12 else 13,
+				TextColor3 = Color3.fromRGB(255, 225, 130),
+				[React.Event.Activated] = function()
+					ClientActionBridge.invoke("toggle_inventory")
+				end,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Stroke = React.createElement("UIStroke", {
+					Thickness = 1,
+					Transparency = 0.15,
 					Color = Color3.fromRGB(255, 225, 130),
 				}),
 			}) else nil,

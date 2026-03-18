@@ -5,7 +5,7 @@ local PlaceConfig = {}
 PlaceConfig.LOBBY_PLACE_ID = 71814662227954
 PlaceConfig.RAID_PLACE_ID = 102615838851895
 PlaceConfig.RAID_SIZE = 8
-PlaceConfig.QUEUE_MAX_WAIT_SECONDS = 300
+PlaceConfig.QUEUE_MAX_WAIT_SECONDS = 50
 
 local function isLobbyFallback(): boolean
 	return workspace:FindFirstChild("Lobby") ~= nil
