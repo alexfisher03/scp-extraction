@@ -9,8 +9,8 @@ local LootDefinitions = require(ReplicatedStorage.Shared.LootDefinitions)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
 local InventoryAuthority = require(script.Parent.inventory.InventoryAuthority)
 local RaidAuthority = require(script.Parent.raid.RaidAuthority)
-local LobbySessionService = if PlaceConfig.isLobbyPlace()
-	then require(script.Parent.lobby.LobbySessionService)
+local ProfileService = if PlaceConfig.isLobbyPlace()
+	then require(script.Parent.lobby.ProfileService)
 	else nil
 
 if not (PlaceConfig.isRaidPlace() or PlaceConfig.isLobbyPlace()) then
@@ -44,6 +44,7 @@ type Item = {
     templateId: string,
     category: string,
     locationState: string?,
+    origin: string?,
     stack: number?,
     ammo: number?,
     capacity: number?,
@@ -249,7 +250,16 @@ end
 
 local function sendSnapshot(player: Player, state: InventoryState)
     state.version += 1
-    snapshotEvent:FireClient(player, toSnapshot(state))
+    local snapshot = toSnapshot(state)
+	if PlaceConfig.isLobbyPlace() and ProfileService ~= nil then
+		ProfileService.applyInventorySnapshot(player.UserId, snapshot, "lobby_inventory_change")
+		snapshot = ProfileService.getInventorySnapshot(player.UserId)
+		local restoredState = restoreStateFromSnapshot(snapshot)
+		if restoredState then
+			InventoryAuthority.setState(player.UserId, restoredState)
+		end
+	end
+    snapshotEvent:FireClient(player, snapshot)
 end
 
 InventoryAuthority.setSnapshotEmitter(sendSnapshot)
@@ -401,12 +411,22 @@ local function getOrCreateState(player: Player): InventoryState
 		end
 	end
 
+	if PlaceConfig.isLobbyPlace() and ProfileService ~= nil then
+		local lobbySnapshot = ProfileService.getInventorySnapshot(player.UserId)
+		local restoredState = restoreStateFromSnapshot(lobbySnapshot)
+		if restoredState then
+			InventoryAuthority.setState(player.UserId, restoredState)
+			return restoredState
+		end
+	end
+
     local itemsById: {[string]: Item} = {
         gun_primary_1 = {
             itemId = "gun_primary_1",
             templateId = "rifle_m4",
             category = "gun",
             locationState = if PlaceConfig.isLobbyPlace() then "stashed" else "inRaid",
+            origin = "BroughtIn",
             acceptedMagTemplateIds = { "mag_556_30" },
             attachedMagId = nil,
         },
@@ -415,6 +435,7 @@ local function getOrCreateState(player: Player): InventoryState
             templateId = "knife",
             category = "melee",
             locationState = if PlaceConfig.isLobbyPlace() then "stashed" else "inRaid",
+            origin = "BroughtIn",
         },
     }
 
@@ -432,7 +453,7 @@ local function getOrCreateState(player: Player): InventoryState
             itemIds = {},
         },
         backpack = {
-            capacity = 12,
+            capacity = 20,
             itemIds = {},
         },
         quickBinds = {},
@@ -450,11 +471,11 @@ end
 
 local function syncLobbyInventoryState(player: Player): InventoryState
 	local state = getOrCreateState(player)
-	if not PlaceConfig.isLobbyPlace() or LobbySessionService == nil then
+	if not PlaceConfig.isLobbyPlace() or ProfileService == nil then
 		return state
 	end
 
-	local lobbySnapshot = LobbySessionService.getInventorySnapshot(player.UserId)
+	local lobbySnapshot = ProfileService.getInventorySnapshot(player.UserId)
 	local restoredState = restoreStateFromSnapshot(lobbySnapshot)
 	if restoredState then
 		InventoryAuthority.setState(player.UserId, restoredState)
@@ -483,6 +504,7 @@ local function createItemFromTemplate(state: InventoryState, templateId: string)
 		templateId = templateId,
 		category = definition.category,
 		locationState = if PlaceConfig.isLobbyPlace() then "stashed" else "inRaid",
+		origin = if PlaceConfig.isRaidPlace() then "Looted" else "BroughtIn",
 		stack = definition.stack,
 		ammo = definition.ammo,
 		capacity = definition.capacity,
@@ -538,6 +560,9 @@ local function createItemFromDroppedLootModel(state: InventoryState, lootModel: 
 		templateId = templateId,
 		category = category,
 		locationState = if PlaceConfig.isLobbyPlace() then "stashed" else "inRaid",
+		origin = if typeof(lootModel:GetAttribute("Origin")) == "string"
+			then lootModel:GetAttribute("Origin")
+			else (if PlaceConfig.isRaidPlace() then "Looted" else "BroughtIn"),
 		stack = if typeof(lootModel:GetAttribute("Stack")) == "number" then lootModel:GetAttribute("Stack") else nil,
 		ammo = if typeof(lootModel:GetAttribute("Ammo")) == "number" then lootModel:GetAttribute("Ammo") else nil,
 		capacity = if typeof(lootModel:GetAttribute("Capacity")) == "number" then lootModel:GetAttribute("Capacity") else nil,
@@ -548,6 +573,11 @@ local function createItemFromDroppedLootModel(state: InventoryState, lootModel: 
 end
 
 applyLootModelStateToItem = function(lootModel: Model, item: Item)
+	local origin = lootModel:GetAttribute("Origin")
+	if typeof(origin) == "string" then
+		item.origin = origin
+	end
+
 	local usesRemaining = lootModel:GetAttribute("UsesRemaining")
 	if typeof(usesRemaining) == "number" then
 		item.usesRemaining = usesRemaining
@@ -571,6 +601,7 @@ end
 
 local function applyItemStateToLootModel(droppedModel: Model, item: Item)
 	droppedModel:SetAttribute("Category", item.category)
+	droppedModel:SetAttribute("Origin", if item.origin == "Looted" then "Looted" else "BroughtIn")
 	if item.stack ~= nil then
 		droppedModel:SetAttribute("Stack", item.stack)
 	end

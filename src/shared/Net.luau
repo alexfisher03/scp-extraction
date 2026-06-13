@@ -21,4 +21,11 @@ return {
 	LobbyQueueStatusEventName = "Lobby_QueueStatus",
 	LobbyNoticeEventName = "Lobby_Notice",
 	LobbyPostRaidContinueEventName = "Lobby_PostRaidContinue",
+	LobbyStashActionEventName = "Lobby_StashAction",
+	TerminalOpenEventName = "Lobby_TerminalOpen",
+	TerminalInteractRequestEventName = "Lobby_TerminalInteractRequest",
+	TerminalCloseEventName = "Lobby_TerminalClose",
+	QuartermasterSellRequestEventName = "Lobby_QuartermasterSellRequest",
+	QuartermasterStateEventName = "Lobby_QuartermasterState",
+	PurchaseTrapLogEventName = "Debug_PurchaseTrapLog",
 }

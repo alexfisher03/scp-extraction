@@ -9,7 +9,7 @@ local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
-local LobbySessionService = require(script.Parent.LobbySessionService)
+local ProfileService = require(script.Parent.ProfileService)
 
 if not PlaceConfig.isLobbyPlace() then
 	return
@@ -31,7 +31,7 @@ local queue: {QueueEntry} = {}
 local queuedSet: {[number]: boolean} = {}
 local starting = false
 local effectiveMaxWaitSeconds = if RunService:IsStudio() then 15 else PlaceConfig.QUEUE_MAX_WAIT_SECONDS
-local effectiveRaidSize = 2
+local effectiveRaidSize = if RunService:IsStudio() then 2 else 4
 local pendingBatches: {[string]: {entries: {QueueEntry}, restored: boolean}} = {}
 local batchIdByUserId: {[number]: string} = {}
 local nextRetryAt = 0
@@ -151,6 +151,25 @@ local function startMatch(entryCount: number)
 		return
 	end
 
+	if RunService:IsStudio() then
+		local entries = takeQueueEntries(entryCount)
+		local studioPlayers = {}
+		for _, entry in ipairs(entries) do
+			if entry.player.Parent then
+				table.insert(studioPlayers, entry.player)
+			end
+		end
+
+		if #studioPlayers > 0 then
+			notifyPlayers(studioPlayers, "Studio queue formed. Cross-place private-server teleports must be tested in the published game.")
+		end
+
+		restoreEntriesToFront(entries)
+		starting = false
+		broadcastQueueStatus()
+		return
+	end
+
 	if Workspace:GetServerTimeNow() < nextRetryAt then
 		return
 	end
@@ -209,15 +228,30 @@ local function startMatch(entryCount: number)
 		loadoutSeed = {},
 		inventorySnapshotsByUserId = {},
 		preRaidInventorySnapshotsByUserId = {},
+		preRaidProfileSnapshotsByUserId = {},
 	}
 
 	for _, queuedPlayer in ipairs(playersToTeleport) do
-		local inventorySnapshot = LobbySessionService.getInventorySnapshot(queuedPlayer.UserId)
-		LobbySessionService.setPreRaidInventorySnapshot(queuedPlayer.UserId, inventorySnapshot)
-		if inventorySnapshot ~= nil then
-			teleportData.inventorySnapshotsByUserId[tostring(queuedPlayer.UserId)] = inventorySnapshot
-			teleportData.preRaidInventorySnapshotsByUserId[tostring(queuedPlayer.UserId)] = inventorySnapshot
+		local userId = queuedPlayer.UserId
+		if not ProfileService.forceSave(userId, "deploy") then
+			for _, entry in ipairs(entries) do
+				batchIdByUserId[entry.player.UserId] = nil
+			end
+			pendingBatches[batchId] = nil
+			restoreEntriesToFront(entries)
+			notifyPlayers(playersToTeleport, "Failed to save profile before deploy")
+			starting = false
+			return
 		end
+
+		local preRaidProfileSnapshot = ProfileService.getProfileClone(userId)
+		ProfileService.setPreRaidProfileSnapshot(userId, preRaidProfileSnapshot)
+		local inventorySnapshot = ProfileService.buildRaidInventorySnapshot(userId)
+
+		teleportData.inventorySnapshotsByUserId[tostring(userId)] = inventorySnapshot
+		teleportData.preRaidInventorySnapshotsByUserId[tostring(userId)] = inventorySnapshot
+		teleportData.preRaidProfileSnapshotsByUserId[tostring(userId)] = preRaidProfileSnapshot
+		print(string.format("[QueueService] deploy snapshot userId=%d %s", userId, ProfileService.getSnapshotSummary(inventorySnapshot)))
 	end
 
 	notifyPlayers(playersToTeleport, "Loading into raid...")

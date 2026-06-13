@@ -41,5 +41,12 @@ ensureRemote(Net.LobbyDevForceStartEventName)
 ensureRemote(Net.LobbyQueueStatusEventName)
 ensureRemote(Net.LobbyNoticeEventName)
 ensureRemote(Net.LobbyPostRaidContinueEventName)
+ensureRemote(Net.LobbyStashActionEventName)
+ensureRemote(Net.TerminalOpenEventName)
+ensureRemote(Net.TerminalInteractRequestEventName)
+ensureRemote(Net.TerminalCloseEventName)
+ensureRemote(Net.QuartermasterSellRequestEventName)
+ensureRemote(Net.QuartermasterStateEventName)
+ensureRemote(Net.PurchaseTrapLogEventName)
 
 return folder

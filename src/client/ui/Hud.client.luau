@@ -28,6 +28,8 @@ local dropItemEvent = remotes:WaitForChild(Net.DropItemRequestEventName) :: Remo
 local itemActionEvent = remotes:WaitForChild(Net.ItemActionRequestEventName) :: RemoteEvent
 local bodyLootCloseEvent = remotes:WaitForChild(Net.BodyLootCloseRequestEventName) :: RemoteEvent
 local bodyLootTransferEvent = remotes:WaitForChild(Net.BodyLootTransferRequestEventName) :: RemoteEvent
+local stashActionEvent = remotes:FindFirstChild(Net.LobbyStashActionEventName) :: RemoteEvent?
+local purchaseTrapLogEvent = remotes:FindFirstChild(Net.PurchaseTrapLogEventName) :: RemoteEvent?
 
 type DragState = {
 	itemId: string,
@@ -139,6 +141,43 @@ local function useInventoryVisible()
 	end, {})
 
 	return visible
+end
+
+local function usePurchaseTrapLogs()
+	local logs, setLogs = React.useState({} :: {any})
+
+	React.useEffect(function()
+		if not purchaseTrapLogEvent then
+			return
+		end
+
+		local conn = purchaseTrapLogEvent.OnClientEvent:Connect(function(entry)
+			if typeof(entry) ~= "table" then
+				return
+			end
+
+			setLogs(function(previous)
+				local nextLogs = table.clone(previous)
+				table.insert(nextLogs, 1, {
+					timestamp = entry.timestamp,
+					eventName = entry.eventName,
+					firstNumericId = entry.firstNumericId,
+					argsText = entry.argsText,
+					message = entry.message,
+				})
+				while #nextLogs > 40 do
+					table.remove(nextLogs)
+				end
+				return nextLogs
+			end)
+		end)
+
+		return function()
+			conn:Disconnect()
+		end
+	end, {})
+
+	return logs
 end
 
 local function useLootPrompt()
@@ -722,6 +761,12 @@ local function sendBodyLootCloseRequest()
 	bodyLootCloseEvent:FireServer()
 end
 
+local function sendLobbyStashActionRequest(action: {[string]: any})
+	if stashActionEvent then
+		stashActionEvent:FireServer(action)
+	end
+end
+
 local function getItemActionLabel(snapshot: any, itemId: string?): string?
 	if not snapshot or not itemId then
 		return nil
@@ -822,7 +867,8 @@ local function containerCard(
 	setHoverState: (HoverState?) -> (),
 	setDragState: (DragState?) -> (),
 	openContextMenuForItem: (string, string, string, string?) -> (),
-	compact: boolean?
+	compact: boolean?,
+	allowDrag: boolean?
 )
 	local container = snapshot and snapshot[containerName] or nil
 	local capacity = if container then container.capacity else 0
@@ -857,7 +903,7 @@ local function containerCard(
 			if isOccupied and compact then function()
 				openContextMenuForItem(itemId :: string, "player", containerName, nil)
 			end else nil,
-			if isOccupied then function()
+			if isOccupied and allowDrag ~= false then function()
 				setDragState({
 					itemId = itemId :: string,
 					fromContainer = containerName,
@@ -869,7 +915,7 @@ local function containerCard(
 					toIndex = slotIndex,
 				})
 			end else nil,
-			if dragState then function(isInside)
+			if dragState and allowDrag ~= false then function(isInside)
 				if isInside then
 					setHoverState({
 						toContainer = containerName,
@@ -894,7 +940,7 @@ local function containerCard(
 		BackgroundColor3 = Color3.fromRGB(24, 24, 24),
 		BorderSizePixel = 0,
 		[React.Event.MouseEnter] = function()
-			if dragState then
+			if dragState and allowDrag ~= false then
 				setHoverState({
 					toContainer = containerName,
 					toIndex = nil,
@@ -934,7 +980,7 @@ local function containerCard(
 			ScrollBarThickness = if compact then 4 else 6,
 			ScrollBarImageColor3 = Color3.fromRGB(110, 110, 110),
 			[React.Event.MouseEnter] = function()
-				if dragState then
+				if dragState and allowDrag ~= false then
 					setHoverState({
 						toContainer = containerName,
 						toIndex = nil,
@@ -1124,6 +1170,131 @@ local function weaponSlotCard(
 	})
 end
 
+local function mobileLobbyInventorySummaryCard(
+	snapshot: any,
+	position: UDim2,
+	size: UDim2,
+	selectedItemId: string?,
+	openContextMenuForItem: (string, string, string, string?) -> ()
+)
+	local children: {[string]: any} = {
+		Layout = React.createElement("UIListLayout", {
+			FillDirection = Enum.FillDirection.Vertical,
+			Padding = UDim.new(0, 4),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+	}
+
+	local layoutOrder = 1
+
+	local function addHeader(text: string)
+		children["Header" .. layoutOrder] = React.createElement("TextLabel", {
+			LayoutOrder = layoutOrder,
+			Size = UDim2.new(1, 0, 0, 18),
+			BackgroundTransparency = 1,
+			Text = text,
+			Font = Enum.Font.GothamBold,
+			TextSize = 12,
+			TextColor3 = Color3.fromRGB(255, 225, 130),
+			TextXAlignment = Enum.TextXAlignment.Left,
+		})
+		layoutOrder += 1
+	end
+
+	local function addSlotRow(labelText: string, itemId: string?, containerName: string)
+		children["Row" .. layoutOrder] = containerSlot(
+			labelText,
+			layoutOrder,
+			itemId ~= nil,
+			false,
+			false,
+			selectedItemId ~= nil and selectedItemId == itemId,
+			if itemId then function()
+				openContextMenuForItem(itemId, "player", containerName, nil)
+			end else nil,
+			nil,
+			nil,
+			if itemId then function()
+				openContextMenuForItem(itemId, "player", containerName, nil)
+			end else nil,
+			true
+		)
+		layoutOrder += 1
+	end
+
+	local weaponRows = {
+		{ label = "PrimaryA", itemId = snapshot and snapshot.weaponSlots.PrimaryA or nil, container = "PrimaryA" },
+		{ label = "PrimaryB", itemId = snapshot and snapshot.weaponSlots.PrimaryB or nil, container = "PrimaryB" },
+		{ label = "Pistol", itemId = snapshot and snapshot.weaponSlots.Pistol or nil, container = "Pistol" },
+		{ label = "Melee", itemId = snapshot and snapshot.weaponSlots.Melee or nil, container = "Melee" },
+	}
+
+	addHeader("Weapons")
+	for _, row in ipairs(weaponRows) do
+		addSlotRow(string.format("%s: %s", row.label, itemLabel(snapshot, row.itemId)), row.itemId, row.container)
+	end
+
+	local function addContainerSection(title: string, containerName: string)
+		local container = snapshot and snapshot[containerName] or nil
+		addHeader(title)
+		if typeof(container) ~= "table" or typeof(container.capacity) ~= "number" then
+			return
+		end
+
+		for slotIndex = 1, container.capacity do
+			local itemId = container.itemIds and container.itemIds[slotIndex] or nil
+			if itemId == "" then
+				itemId = nil
+			end
+			addSlotRow(
+				if itemId then itemLabel(snapshot, itemId) else string.format("[%d] Empty", slotIndex),
+				itemId,
+				containerName
+			)
+		end
+	end
+
+	addContainerSection("Rig", "rig")
+	addContainerSection("Backpack", "backpack")
+
+	return React.createElement("Frame", {
+		AnchorPoint = Vector2.new(0, 0),
+		Position = position,
+		Size = size,
+		BackgroundTransparency = 0.2,
+		BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+		BorderSizePixel = 0,
+	}, {
+		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+		Stroke = React.createElement("UIStroke", {
+			Thickness = 1,
+			Transparency = 0.2,
+			Color = Color3.fromRGB(75, 75, 75),
+		}),
+		Title = React.createElement("TextLabel", {
+			Position = UDim2.fromOffset(10, 8),
+			Size = UDim2.new(1, -20, 0, 20),
+			BackgroundTransparency = 1,
+			Text = "Inventory",
+			Font = Enum.Font.GothamBold,
+			TextSize = 13,
+			TextColor3 = Color3.fromRGB(255, 225, 130),
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}),
+		List = React.createElement("ScrollingFrame", {
+			Position = UDim2.fromOffset(10, 30),
+			Size = UDim2.new(1, -20, 1, -38),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			CanvasSize = UDim2.fromOffset(0, 0),
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			ScrollBarThickness = 4,
+			ScrollBarImageColor3 = Color3.fromRGB(110, 110, 110),
+		}, children),
+	})
+end
+
 local function useTimedCheckMagText(snapshot: any)
 	local text, setText = React.useState("")
 	local seqRef = React.useRef(0)
@@ -1167,6 +1338,7 @@ local function HudApp()
 	local lootPrompt = useLootPrompt()
 	local raidState = useRaidState()
 	local bodyLootSnapshot = useBodyLootSnapshot()
+	local purchaseTrapLogs = usePurchaseTrapLogs()
 	local timedCheckMagText = useTimedCheckMagText(snapshot)
 	local loadingOverlayTransparency, loadingOverlayText, loadingOverlayDetailText, isRaidLoading, loadingSpinnerFrame, loadingChecklist, loadingActiveMarkerVisible = useRaidLoadingOverlay(raidState, snapshot)
 	local dragState, setDragState = React.useState(nil :: DragState?)
@@ -1178,7 +1350,9 @@ local function HudApp()
 	local extractsVisible, setExtractsVisible = React.useState(false)
 	local mobileUtilityOpen, setMobileUtilityOpen = React.useState(false)
 	local mobileInventoryPage, setMobileInventoryPage = React.useState(1)
+	local debugLogOpen, setDebugLogOpen = React.useState(false)
 	local isWaitingForPlayers = raidState ~= nil and raidState.phase == "WaitingForPlayers"
+	local isLobbyStashView = isLobbyPlace and snapshot ~= nil and typeof(snapshot.stash) == "table"
 	local shouldShowRaidTimer = raidState ~= nil
 		and typeof(raidState.raidEndTime) == "number"
 		and (raidState.phase == "InRaid" or raidState.phase == "Extracting")
@@ -1235,7 +1409,30 @@ local function HudApp()
 
 			local activeHover = hoverState
 			if activeHover then
-				if dragState.sourceKind == "body" and dragState.bodyId then
+				if isLobbyStashView and not isMobile then
+					if dragState.fromContainer == "stash" then
+						local targetContainer = activeHover.toContainer
+						if targetContainer == "rig" or targetContainer == "backpack" then
+							sendLobbyStashActionRequest({
+								kind = "MoveToInventory",
+								itemId = dragState.itemId,
+								dest = targetContainer,
+							})
+						end
+					elseif activeHover.toContainer == "stash" then
+						sendLobbyStashActionRequest({
+							kind = "MoveToStash",
+							itemId = dragState.itemId,
+						})
+					elseif dragState.sourceKind ~= "body" then
+						sendMoveItemRequest(
+							dragState.itemId,
+							dragState.fromContainer,
+							activeHover.toContainer,
+							activeHover.toIndex
+						)
+					end
+				elseif dragState.sourceKind == "body" and dragState.bodyId then
 					sendBodyLootTransferRequest(
 						dragState.bodyId,
 						dragState.itemId,
@@ -1259,7 +1456,7 @@ local function HudApp()
 		return function()
 			conn:Disconnect()
 		end
-	end, { inventoryVisible, dragState, hoverState })
+	end, { inventoryVisible, dragState, hoverState, isLobbyStashView, isMobile })
 
 	React.useEffect(function()
 		if not inventoryVisible then
@@ -1380,6 +1577,11 @@ local function HudApp()
 		then {
 			{ id = "body", title = "Body Loot" },
 		}
+		elseif isMobile and isLobbyStashView
+		then {
+			{ id = "inventory", title = "Inventory" },
+			{ id = "stash", title = "Stash" },
+		}
 		else {
 			{ id = "weapons", title = "Weapons" },
 			{ id = "rig", title = "Rig" },
@@ -1424,6 +1626,29 @@ local function HudApp()
 		end
 
 		return false
+	end
+
+	local function getOpenWeaponSlotDestination(item: any): string?
+		if not snapshot or not item then
+			return nil
+		end
+
+		if item.category == "gun" then
+			if snapshot.weaponSlots.PrimaryA == nil then
+				return "primaryA"
+			end
+			if snapshot.weaponSlots.PrimaryB == nil then
+				return "primaryB"
+			end
+		end
+		if item.category == "pistol" and snapshot.weaponSlots.Pistol == nil then
+			return "pistol"
+		end
+		if item.category == "melee" and snapshot.weaponSlots.Melee == nil then
+			return "melee"
+		end
+
+		return nil
 	end
 
 	local function isWeaponSlotContainer(containerName: string?): boolean
@@ -1480,6 +1705,95 @@ local function HudApp()
 					label = "Add to Weapon Slot",
 					run = function()
 						sendBodyLootTransferRequest(selectedItemSource.bodyId :: string, selectedItemId, "OpenWeaponSlot", nil)
+						closeContextMenu()
+					end,
+				})
+			end
+		elseif isLobbyStashView then
+			if selectedItemSource.containerName == "stash" then
+				if containerHasSpace(snapshot and snapshot.backpack or nil) then
+					table.insert(menuActions, {
+						label = "Move to Inventory",
+						run = function()
+							sendLobbyStashActionRequest({
+								kind = "MoveToInventory",
+								itemId = selectedItemId,
+								dest = "backpack",
+							})
+							closeContextMenu()
+						end,
+					})
+				end
+
+				if (selectedMenuItem.category == "mag" or selectedMenuItem.category == "med")
+					and containerHasSpace(snapshot and snapshot.rig or nil) then
+					table.insert(menuActions, {
+						label = "Move to Rig",
+						run = function()
+							sendLobbyStashActionRequest({
+								kind = "MoveToInventory",
+								itemId = selectedItemId,
+								dest = "rig",
+							})
+							closeContextMenu()
+						end,
+					})
+				end
+
+				local openWeaponSlotDestination = getOpenWeaponSlotDestination(selectedMenuItem)
+				if openWeaponSlotDestination then
+					table.insert(menuActions, {
+						label = "Move to Weapon Slot",
+						run = function()
+							sendLobbyStashActionRequest({
+								kind = "MoveToInventory",
+								itemId = selectedItemId,
+								dest = openWeaponSlotDestination,
+							})
+							closeContextMenu()
+						end,
+					})
+				end
+			else
+				if selectedItemSource.containerName ~= "backpack" and containerHasSpace(snapshot and snapshot.backpack or nil) then
+					table.insert(menuActions, {
+						label = "Move to Backpack",
+						run = function()
+							sendMoveItemRequest(selectedItemId, selectedItemSource.containerName, "backpack", nil)
+							closeContextMenu()
+						end,
+					})
+				end
+
+				if (selectedMenuItem.category == "mag" or selectedMenuItem.category == "med")
+					and selectedItemSource.containerName ~= "rig"
+					and containerHasSpace(snapshot and snapshot.rig or nil) then
+					table.insert(menuActions, {
+						label = "Move to Rig",
+						run = function()
+							sendMoveItemRequest(selectedItemId, selectedItemSource.containerName, "rig", nil)
+							closeContextMenu()
+						end,
+					})
+				end
+
+				if not isWeaponSlotContainer(selectedItemSource.containerName) and hasOpenWeaponSlotForItem(selectedMenuItem) then
+					table.insert(menuActions, {
+						label = "Move to Weapon Slot",
+						run = function()
+							sendMoveItemRequest(selectedItemId, selectedItemSource.containerName, "OpenWeaponSlot", nil)
+							closeContextMenu()
+						end,
+					})
+				end
+
+				table.insert(menuActions, {
+					label = "Move to Stash",
+					run = function()
+						sendLobbyStashActionRequest({
+							kind = "MoveToStash",
+							itemId = selectedItemId,
+						})
 						closeContextMenu()
 					end,
 				})
@@ -1826,6 +2140,35 @@ local function HudApp()
 		end
 
 	elseif inventoryVisible then
+		local inventoryTitleText = "Inventory"
+		if isLobbyStashView then
+			inventoryTitleText = if isMobile then "Stash" else "Stash Management"
+		elseif raidState and raidState.phase == "Stash" then
+			inventoryTitleText = if isMobile then "Stash" else "Stash Mode"
+		elseif bodyLootSnapshot then
+			inventoryTitleText = if isMobile then "Body Loot" else "Inventory (Body Loot Open)"
+		elseif not isMobile then
+			inventoryTitleText = "Inventory (Tab to Close, drag between Rig and Backpack)"
+		end
+
+		local inventoryHintText = ""
+		if dragState then
+			inventoryHintText = "Dragging: " .. itemLabel(
+				if dragState.sourceKind == "body" then bodyLootSnapshot else snapshot,
+				dragState.itemId
+			)
+		elseif isLobbyStashView then
+			inventoryHintText = if isMobile
+				then "Tap an item to move it between your inventory and stash."
+				else "Drag items between your inventory and stash, or click for move options."
+		elseif isMobile then
+			inventoryHintText = if bodyLootSnapshot
+				then "Tap an item to choose where it goes."
+				else "Tap an item to manage it. Use the arrows to switch pages."
+		else
+			inventoryHintText = "Drag an item to a slot in Rig or Backpack."
+		end
+
 		local inventoryPanel = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = if isMobile then UDim2.fromScale(0.56, 0.5) else UDim2.fromScale(0.53, 0.5),
@@ -1844,18 +2187,7 @@ local function HudApp()
 				Position = UDim2.fromOffset(16, 10),
 				Size = UDim2.new(1, if isMobile then -88 else -32, 0, 24),
 				BackgroundTransparency = 1,
-				Text = if isMobile then
-					(if raidState and raidState.phase == "Stash"
-						then "Stash"
-						elseif bodyLootSnapshot
-						then "Body Loot"
-						else "Inventory")
-					else
-					(if raidState and raidState.phase == "Stash"
-						then "Stash Mode"
-						elseif bodyLootSnapshot
-						then "Inventory (Body Loot Open)"
-						else "Inventory (Tab to Close, drag between Rig and Backpack)"),
+				Text = inventoryTitleText,
 				Font = Enum.Font.GothamBold,
 				TextSize = if isMobile then 14 else 16,
 				TextXAlignment = Enum.TextXAlignment.Left,
@@ -1887,11 +2219,7 @@ local function HudApp()
 				Position = UDim2.new(0, 16, 1, if isMobile then -26 else -28),
 				Size = UDim2.new(1, -32, 0, 18),
 				BackgroundTransparency = 1,
-				Text = if dragState
-					then ("Dragging: " .. itemLabel(if dragState.sourceKind == "body" then bodyLootSnapshot else snapshot, dragState.itemId))
-					elseif isMobile
-					then (if bodyLootSnapshot then "Tap an item to choose where it goes." else "Tap an item to manage it. Use the arrows to switch pages.")
-					else "Drag an item to a slot in Rig or Backpack.",
+				Text = inventoryHintText,
 				Font = Enum.Font.Gotham,
 				TextSize = if isMobile then 11 else 13,
 				TextXAlignment = Enum.TextXAlignment.Left,
@@ -1967,41 +2295,75 @@ local function HudApp()
 				TextColor3 = Color3.fromRGB(220, 220, 220),
 				TextXAlignment = Enum.TextXAlignment.Center,
 			}) else nil,
-			Weapons = if not isMobile or currentMobilePageId == "weapons" then weaponSlotCard(
+			InventorySummary = if isMobile and isLobbyStashView and currentMobilePageId == "inventory" then mobileLobbyInventorySummaryCard(
+				snapshot,
+				UDim2.new(0, 16, 0, 84),
+				UDim2.new(1, -32, 1, -128),
+				selectedItemId,
+				openContextMenuForItem
+			) else nil,
+			Weapons = if (not isMobile) or (isMobile and not isLobbyStashView and currentMobilePageId == "weapons") then weaponSlotCard(
 				snapshot,
 				if isMobile then UDim2.new(0, 16, 0, 84) else UDim2.new(0, 16, 0, 44),
-				if isMobile then UDim2.new(1, -32, 1, -128) else UDim2.new(if bodyLootSnapshot then 0.42 else 0.47, -24, 0.30, -8),
+				if isMobile
+					then UDim2.new(1, -32, 1, -128)
+					else UDim2.new(if bodyLootSnapshot or isLobbyStashView then 0.58 else 0.47, -24, 0.30, -8),
 				selectedItemId,
 				openContextMenuForItem,
 				isMobile
 			) else nil,
-			Rig = if not isMobile or currentMobilePageId == "rig" then containerCard(
+			Rig = if not isMobile or (not isLobbyStashView and currentMobilePageId == "rig") then containerCard(
 				"Rig",
 				"rig",
 				snapshot,
-				if isMobile then UDim2.new(0, 16, 0, 84) else UDim2.new(if bodyLootSnapshot then 0 else 0.5, if bodyLootSnapshot then 16 else 8, if bodyLootSnapshot then 0.30 else 0, if bodyLootSnapshot then 52 else 44),
-				if isMobile then UDim2.new(1, -32, 1, -128) else UDim2.new(if bodyLootSnapshot then 0.42 else 0.5, -24, if bodyLootSnapshot then 0.28 else 0.58, if bodyLootSnapshot then -8 else -56),
+				if isMobile
+					then UDim2.new(0, 16, 0, 84)
+					else UDim2.new(if bodyLootSnapshot then 0 else 0, if bodyLootSnapshot then 16 else 16, if bodyLootSnapshot then 0.30 else 0.32, if bodyLootSnapshot then 52 else 44),
+				if isMobile
+					then UDim2.new(1, -32, 1, -128)
+					else UDim2.new(if bodyLootSnapshot or isLobbyStashView then 0.58 else 0.5, -24, if bodyLootSnapshot then 0.28 else 0.24, if bodyLootSnapshot then -8 else -8),
 				dragState,
 				hoverState,
 				selectedItemId,
 				setHoverState,
 				setDragState,
 				openContextMenuForItem,
-				isMobile
+				isMobile,
+				not isMobile
 			) else nil,
-			Backpack = if not isMobile or currentMobilePageId == "backpack" then containerCard(
+			Backpack = if not isMobile or (not isLobbyStashView and currentMobilePageId == "backpack") then containerCard(
 				"Backpack",
 				"backpack",
 				snapshot,
-				if isMobile then UDim2.new(0, 16, 0, 84) else UDim2.new(0, 16, if bodyLootSnapshot then 0.58 else 0.42, 52),
-				if isMobile then UDim2.new(1, -32, 1, -128) else UDim2.new(if bodyLootSnapshot then 0.42 else 0.47, -24, if bodyLootSnapshot then 0.36 else 0.58, if bodyLootSnapshot then -80 else -80),
+				if isMobile
+					then UDim2.new(0, 16, 0, 84)
+					else UDim2.new(0, 16, if bodyLootSnapshot then 0.58 else 0.58, 52),
+				if isMobile
+					then UDim2.new(1, -32, 1, -128)
+					else UDim2.new(if bodyLootSnapshot or isLobbyStashView then 0.58 else 0.47, -24, if bodyLootSnapshot then 0.36 else 0.34, if bodyLootSnapshot then -80 else -84),
 				dragState,
 				hoverState,
 				selectedItemId,
 				setHoverState,
 				setDragState,
 				openContextMenuForItem,
-				isMobile
+				isMobile,
+				not isMobile
+			) else nil,
+			Stash = if isLobbyStashView and (not isMobile or currentMobilePageId == "stash") then containerCard(
+				"Stash",
+				"stash",
+				snapshot,
+				if isMobile then UDim2.new(0, 16, 0, 84) else UDim2.new(0.62, 8, 0, 44),
+				if isMobile then UDim2.new(1, -32, 1, -128) else UDim2.new(0.38, -24, 0.88, -72),
+				dragState,
+				hoverState,
+				selectedItemId,
+				setHoverState,
+				setDragState,
+				openContextMenuForItem,
+				isMobile,
+				not isMobile
 			) else nil,
 			BodyLoot = if bodyLootSnapshot and (not isMobile or currentMobilePageId == "body") then bodyContainerCard(
 				bodyLootSnapshot,
@@ -2287,6 +2649,147 @@ local function HudApp()
 				Step8 = loadingStepLabel(loadingChecklist[8], 8, loadingActiveMarkerVisible, isMobile),
 			}) else nil,
 		})
+	end
+
+	if isRaidPlace then
+		rootChildren.DebugLogToggle = React.createElement("TextButton", {
+			AnchorPoint = Vector2.new(0, 0),
+			Position = UDim2.new(0, 16, 0, if isMobile then 56 else 16),
+			Size = UDim2.fromOffset(if isMobile then 76 else 92, 34),
+			BackgroundColor3 = Color3.fromRGB(18, 18, 18),
+			BackgroundTransparency = 0.12,
+			BorderSizePixel = 0,
+			Text = string.format("Logs (%d)", #purchaseTrapLogs),
+			Font = Enum.Font.GothamBold,
+			TextSize = if isMobile then 12 else 13,
+			TextColor3 = Color3.fromRGB(255, 225, 130),
+			ZIndex = 60,
+			[React.Event.Activated] = function()
+				setDebugLogOpen(function(previous)
+					return not previous
+				end)
+			end,
+		}, {
+			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			Stroke = React.createElement("UIStroke", {
+				Thickness = 1,
+				Transparency = 0.08,
+				Color = Color3.fromRGB(255, 150, 120),
+			}),
+		})
+
+		if debugLogOpen then
+			local logChildren: {[string]: any} = {
+				Layout = React.createElement("UIListLayout", {
+					FillDirection = Enum.FillDirection.Vertical,
+					Padding = UDim.new(0, 6),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+				}),
+			}
+
+			if #purchaseTrapLogs == 0 then
+				logChildren.Empty = React.createElement("TextLabel", {
+					LayoutOrder = 1,
+					Size = UDim2.new(1, 0, 0, 20),
+					BackgroundTransparency = 1,
+					Text = "No purchase prompts logged yet.",
+					Font = Enum.Font.Code,
+					TextSize = if isMobile then 12 else 13,
+					TextColor3 = Color3.fromRGB(180, 180, 180),
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextWrapped = true,
+				})
+			else
+				for index, entry in ipairs(purchaseTrapLogs) do
+					local timestamp = if typeof(entry.timestamp) == "number"
+						then string.format("%.2f", entry.timestamp)
+						else "?"
+					local message = if typeof(entry.message) == "string"
+						then entry.message
+						else "unknown"
+					logChildren["Log" .. index] = React.createElement("TextLabel", {
+						LayoutOrder = index,
+						Size = UDim2.new(1, 0, 0, if isMobile then 44 else 38),
+						BackgroundColor3 = Color3.fromRGB(26, 26, 26),
+						BackgroundTransparency = 0.18,
+						BorderSizePixel = 0,
+						Text = string.format("[%s] %s", timestamp, message),
+						Font = Enum.Font.Code,
+						TextSize = if isMobile then 11 else 12,
+						TextWrapped = true,
+						TextColor3 = Color3.new(1, 1, 1),
+						TextXAlignment = Enum.TextXAlignment.Left,
+						TextYAlignment = Enum.TextYAlignment.Top,
+					}, {
+						Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
+						Padding = React.createElement("UIPadding", {
+							PaddingLeft = UDim.new(0, 8),
+							PaddingRight = UDim.new(0, 8),
+							PaddingTop = UDim.new(0, 6),
+							PaddingBottom = UDim.new(0, 6),
+						}),
+					})
+				end
+			end
+
+			rootChildren.DebugLogPanel = React.createElement("Frame", {
+				AnchorPoint = Vector2.new(0, 0),
+				Position = UDim2.new(0, 16, 0, if isMobile then 96 else 56),
+				Size = UDim2.fromOffset(if isMobile then 340 else 420, if isMobile then 240 else 280),
+				BackgroundColor3 = Color3.fromRGB(14, 14, 14),
+				BackgroundTransparency = 0.06,
+				BorderSizePixel = 0,
+				ZIndex = 60,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
+				Stroke = React.createElement("UIStroke", {
+					Thickness = 1,
+					Transparency = 0.08,
+					Color = Color3.fromRGB(255, 150, 120),
+				}),
+				Title = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(12, 10),
+					Size = UDim2.new(1, -56, 0, 20),
+					BackgroundTransparency = 1,
+					Text = "Purchase Trap Log",
+					Font = Enum.Font.GothamBold,
+					TextSize = if isMobile then 14 else 15,
+					TextColor3 = Color3.fromRGB(255, 225, 130),
+					TextXAlignment = Enum.TextXAlignment.Left,
+					ZIndex = 61,
+				}),
+				Close = React.createElement("TextButton", {
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, 8),
+					Size = UDim2.fromOffset(28, 28),
+					BackgroundColor3 = Color3.fromRGB(28, 28, 28),
+					BackgroundTransparency = 0.08,
+					BorderSizePixel = 0,
+					Text = "X",
+					Font = Enum.Font.GothamBold,
+					TextSize = 14,
+					TextColor3 = Color3.fromRGB(255, 225, 130),
+					ZIndex = 61,
+					[React.Event.Activated] = function()
+						setDebugLogOpen(false)
+					end,
+				}, {
+					Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				}),
+				List = React.createElement("ScrollingFrame", {
+					Position = UDim2.fromOffset(12, 38),
+					Size = UDim2.new(1, -24, 1, -50),
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					CanvasSize = UDim2.fromOffset(0, 0),
+					AutomaticCanvasSize = Enum.AutomaticSize.Y,
+					ScrollingDirection = Enum.ScrollingDirection.Y,
+					ScrollBarThickness = if isMobile then 4 else 6,
+					ScrollBarImageColor3 = Color3.fromRGB(120, 120, 120),
+					ZIndex = 61,
+				}, logChildren),
+			})
+		end
 	end
 
 	return React.createElement("ScreenGui", {

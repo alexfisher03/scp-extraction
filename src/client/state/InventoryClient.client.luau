@@ -115,6 +115,10 @@ local function setInventoryVisible(visible: boolean)
 	applyInventoryInputMode(visible)
 end
 
+local function openInventory()
+	setInventoryVisible(true)
+end
+
 local function sendAction(payload: {[string]: any})
 	actionEvent:FireServer(payload)
 end
@@ -222,6 +226,7 @@ local slotByKey = {
 }
 
 ClientActionBridge.register("toggle_inventory", toggleInventory)
+ClientActionBridge.register("open_inventory", openInventory)
 ClientActionBridge.register("close_inventory", closeInventory)
 ClientActionBridge.register("reload", requestReload)
 ClientActionBridge.register("check_mag", requestCheckMag)

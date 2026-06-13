@@ -28,7 +28,7 @@ local bodyLootSnapshotEvent = remotes:WaitForChild(Net.BodyLootSnapshotEventName
 local EXTRACT_TICK = 0.1
 local DEFAULT_EXTRACT_TIME = 5
 local BODY_OPEN_DISTANCE = 12
-local RAID_DURATION_SECONDS = 2 * 60
+local RAID_DURATION_SECONDS = 20 * 60
 local READY_TIMEOUT_SECONDS = 20
 
 type RaidState = {
@@ -748,8 +748,12 @@ local function buildRaidResultPayload(player: Player, status: string, inventoryS
 	local joinData = player:GetJoinData()
 	local teleportData = joinData.TeleportData
 	local preRaidInventorySnapshot = nil
+	local preRaidProfileSnapshot = nil
 	if typeof(teleportData) == "table" and typeof(teleportData.preRaidInventorySnapshotsByUserId) == "table" then
 		preRaidInventorySnapshot = teleportData.preRaidInventorySnapshotsByUserId[tostring(player.UserId)]
+	end
+	if typeof(teleportData) == "table" and typeof(teleportData.preRaidProfileSnapshotsByUserId) == "table" then
+		preRaidProfileSnapshot = teleportData.preRaidProfileSnapshotsByUserId[tostring(player.UserId)]
 	end
 
 	return {
@@ -759,6 +763,7 @@ local function buildRaidResultPayload(player: Player, status: string, inventoryS
 		eliminations = getEliminationLog(player.UserId),
 		inventorySnapshot = inventorySnapshot,
 		preRaidInventorySnapshot = preRaidInventorySnapshot,
+		preRaidProfileSnapshot = preRaidProfileSnapshot,
 		raidEndedAt = Workspace:GetServerTimeNow(),
 		reason = reason,
 	}
