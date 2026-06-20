@@ -5,6 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage.Shared.Net)
+local InventoryGrid = require(ReplicatedStorage.Shared.InventoryGrid)
 local LootDefinitions = require(ReplicatedStorage.Shared.LootDefinitions)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
 local InventoryAuthority = require(script.Parent.inventory.InventoryAuthority)
@@ -50,6 +51,8 @@ type Item = {
     capacity: number?,
     usesRemaining: number?,
     usesMax: number?,
+    inventorySize: {width: number, height: number}?,
+    inventoryRotated: boolean?,
     attachedMagId: string?,
     acceptedMagTemplateIds: {string}?,
 }
@@ -128,16 +131,6 @@ local function cloneItems(itemsById: {[string]: Item}): {[string]: Item}
     return out
 end
 
-local function buildHotbarItemIds(state: InventoryState): {string?}
-    local hotbar: {string?} = table.create(5)
-    hotbar[1] = state.weaponSlots.PrimaryA
-    hotbar[2] = state.weaponSlots.PrimaryB
-    hotbar[3] = state.weaponSlots.Pistol
-    hotbar[4] = state.weaponSlots.Melee
-    hotbar[5] = state.quickBinds[1]
-    return hotbar
-end
-
 local function toSnapshot(state: InventoryState)
     return {
         version = state.version,
@@ -152,7 +145,6 @@ local function toSnapshot(state: InventoryState)
             itemIds = cloneContainerItemIds(state.backpack),
         },
         quickBinds = table.clone(state.quickBinds),
-        hotbarItemIds = buildHotbarItemIds(state),
         itemsById = cloneItems(state.itemsById),
         isReloading = state.isReloading,
         lastCheckMag = state.lastCheckMag,
@@ -309,8 +301,13 @@ local function containerHasItem(container: Container, itemId: string): boolean
 	return findItemIndex(container, itemId) ~= nil
 end
 
-local function canAddToContainer(container: Container): boolean
-    return countContainerItems(container) < container.capacity
+local function canAddToContainer(state: InventoryState, container: Container, item: Item): boolean
+	local containerName = if container == state.rig then "rig" else "backpack"
+	return InventoryGrid.canFitItem(container.itemIds, state.itemsById, container.capacity, containerName, item)
+end
+
+local function getContainerGridName(state: InventoryState, container: Container): string
+	return if container == state.rig then "rig" else "backpack"
 end
 
 local function getContainerByName(state: InventoryState, containerName: string): Container?
@@ -510,6 +507,15 @@ local function createItemFromTemplate(state: InventoryState, templateId: string)
 		capacity = definition.capacity,
 		usesRemaining = definition.usesRemaining,
 		usesMax = definition.usesMax,
+		inventorySize = if typeof(definition.inventorySize) == "table"
+			then {
+				width = definition.inventorySize.width,
+				height = definition.inventorySize.height,
+			}
+			else nil,
+		acceptedMagTemplateIds = if typeof(definition.acceptedMagTemplateIds) == "table"
+			then cloneArray(definition.acceptedMagTemplateIds)
+			else nil,
 	}
 end
 
@@ -554,6 +560,14 @@ local function createItemFromDroppedLootModel(state: InventoryState, lootModel: 
 	if typeof(category) ~= "string" then
 		return nil
 	end
+	local inventoryWidth = lootModel:GetAttribute("InventoryWidth")
+	local inventoryHeight = lootModel:GetAttribute("InventoryHeight")
+	local inventorySize = if typeof(inventoryWidth) == "number" and typeof(inventoryHeight) == "number"
+		then {
+			width = inventoryWidth,
+			height = inventoryHeight,
+		}
+		else nil
 
 	return {
 		itemId = makeItemId(state, templateId),
@@ -568,6 +582,7 @@ local function createItemFromDroppedLootModel(state: InventoryState, lootModel: 
 		capacity = if typeof(lootModel:GetAttribute("Capacity")) == "number" then lootModel:GetAttribute("Capacity") else nil,
 		usesRemaining = if typeof(lootModel:GetAttribute("UsesRemaining")) == "number" then lootModel:GetAttribute("UsesRemaining") else nil,
 		usesMax = if typeof(lootModel:GetAttribute("UsesMax")) == "number" then lootModel:GetAttribute("UsesMax") else nil,
+		inventorySize = inventorySize,
 		acceptedMagTemplateIds = parseAcceptedMagTemplateIds(lootModel:GetAttribute("AcceptedMagTemplateIds")),
 	}
 end
@@ -597,6 +612,15 @@ applyLootModelStateToItem = function(lootModel: Model, item: Item)
 	if typeof(capacity) == "number" then
 		item.capacity = capacity
 	end
+
+	local inventoryWidth = lootModel:GetAttribute("InventoryWidth")
+	local inventoryHeight = lootModel:GetAttribute("InventoryHeight")
+	if typeof(inventoryWidth) == "number" and typeof(inventoryHeight) == "number" then
+		item.inventorySize = {
+			width = inventoryWidth,
+			height = inventoryHeight,
+		}
+	end
 end
 
 local function applyItemStateToLootModel(droppedModel: Model, item: Item)
@@ -617,6 +641,10 @@ local function applyItemStateToLootModel(droppedModel: Model, item: Item)
 	if item.capacity ~= nil then
 		droppedModel:SetAttribute("Capacity", item.capacity)
 	end
+	if item.inventorySize ~= nil then
+		droppedModel:SetAttribute("InventoryWidth", item.inventorySize.width)
+		droppedModel:SetAttribute("InventoryHeight", item.inventorySize.height)
+	end
 	local acceptedMagTemplateIds = serializeAcceptedMagTemplateIds(item)
 	if acceptedMagTemplateIds then
 		droppedModel:SetAttribute("AcceptedMagTemplateIds", acceptedMagTemplateIds)
@@ -624,7 +652,8 @@ local function applyItemStateToLootModel(droppedModel: Model, item: Item)
 end
 
 local function addItemToContainer(state: InventoryState, container: Container, item: Item): boolean
-	local slotIndex = getFirstEmptySlot(container)
+	local containerName = getContainerGridName(state, container)
+	local slotIndex = InventoryGrid.placeItem(container.itemIds, state.itemsById, container.capacity, containerName, item, nil, nil)
 	if not slotIndex then
 		return false
 	end
@@ -635,6 +664,15 @@ local function addItemToContainer(state: InventoryState, container: Container, i
 end
 
 local function addItemByCategoryPriority(state: InventoryState, item: Item): boolean
+	if item.category == "gun" or item.category == "pistol" or item.category == "melee" then
+		local openSlot = resolveOpenWeaponSlotName(state, item)
+		if openSlot then
+			state.itemsById[item.itemId] = item
+			state.weaponSlots[openSlot] = item.itemId
+			return true
+		end
+	end
+
 	if item.category == "mag" or item.category == "ammo" or item.category == "med" then
 		return addItemToContainer(state, state.rig, item)
 			or addItemToContainer(state, state.backpack, item)
@@ -1083,27 +1121,9 @@ local function handleUseKeycard(player: Player, state: InventoryState, payload: 
 	sendSnapshot(player, state)
 end
 
-local function resolveMoveDestinationIndex(container: Container, toIndex: number?): number?
-	if toIndex ~= nil then
-		local requestedIndex = math.floor(toIndex)
-		if requestedIndex < 1 or requestedIndex > container.capacity then
-			return nil
-		end
-
-		if container.itemIds[requestedIndex] ~= nil then
-			return nil
-		end
-
-		return requestedIndex
-	end
-
-	for slotIndex = 1, container.capacity do
-		if container.itemIds[slotIndex] == nil then
-			return slotIndex
-		end
-	end
-
-	return nil
+local function resolveMoveDestinationIndex(state: InventoryState, container: Container, item: Item, toIndex: number?, ignoreItemId: string?): number?
+	local containerName = getContainerGridName(state, container)
+	return InventoryGrid.placeItem(container.itemIds, state.itemsById, container.capacity, containerName, item, toIndex, ignoreItemId)
 end
 
 local function loadMagazineIntoGun(state: InventoryState, gun: Item, magItem: Item): boolean
@@ -1114,6 +1134,11 @@ local function loadMagazineIntoGun(state: InventoryState, gun: Item, magItem: It
 	end
 
 	if not isCompatibleMag(gun, magItem) then
+		warn(string.format(
+			"[InventoryService] Load failed: incompatible mag gun=%s mag=%s",
+			tostring(gun.templateId),
+			tostring(magItem.templateId)
+		))
 		return false
 	end
 
@@ -1228,7 +1253,7 @@ local function handleMoveItem(player: Player, state: InventoryState, payload: {[
 
 		local originalItemId = fromContainer.itemIds[fromIndex]
 		fromContainer.itemIds[fromIndex] = nil
-		local sameContainerDestinationIndex = resolveMoveDestinationIndex(toContainer, toIndex)
+		local sameContainerDestinationIndex = resolveMoveDestinationIndex(state, toContainer, item, toIndex, itemId)
 		if not sameContainerDestinationIndex then
 			fromContainer.itemIds[fromIndex] = originalItemId
 			return
@@ -1248,11 +1273,7 @@ local function handleMoveItem(player: Player, state: InventoryState, payload: {[
 		return
 	end
 
-	if not canAddToContainer(toContainer) then
-		return
-	end
-
-	local destinationIndex = resolveMoveDestinationIndex(toContainer, toIndex)
+	local destinationIndex = resolveMoveDestinationIndex(state, toContainer, item, toIndex, itemId)
 	if not destinationIndex then
 		return
 	end
@@ -1471,12 +1492,42 @@ local function handleItemAction(player: Player, state: InventoryState, itemId: s
 
 		local gun = getLoadTargetGun(state)
 		if not gun then
+			warn("[InventoryService] Load failed: no equipped or primary gun")
 			return
 		end
 
 		if loadMagazineIntoGun(state, gun, item) then
 			sendSnapshot(player, state)
 		end
+		return
+	end
+
+	if actionType == "Rotate" then
+		local container = getContainerByName(state, getItemContainerName(state, itemId) or "")
+		if not container then
+			return
+		end
+
+		local anchorIndex = findItemIndex(container, itemId)
+		if not anchorIndex then
+			return
+		end
+
+		item.inventoryRotated = not (item.inventoryRotated == true)
+		if not InventoryGrid.canFitAt(
+			container.itemIds,
+			state.itemsById,
+			container.capacity,
+			getContainerGridName(state, container),
+			item,
+			anchorIndex,
+			itemId
+		) then
+			item.inventoryRotated = not (item.inventoryRotated == true)
+			return
+		end
+
+		sendSnapshot(player, state)
 		return
 	end
 

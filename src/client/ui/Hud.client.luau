@@ -11,6 +11,7 @@ local ReactRoblox = require(Packages:WaitForChild("ReactRoblox"))
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
+local InventoryGrid = require(ReplicatedStorage.Shared.InventoryGrid)
 local ClientActionBridge = require(script.Parent.Parent.state.ClientActionBridge)
 local InventoryStore = require(script.Parent.Parent.state.InventoryStore)
 local LootPromptStore = require(script.Parent.Parent.state.LootPromptStore)
@@ -29,7 +30,6 @@ local itemActionEvent = remotes:WaitForChild(Net.ItemActionRequestEventName) :: 
 local bodyLootCloseEvent = remotes:WaitForChild(Net.BodyLootCloseRequestEventName) :: RemoteEvent
 local bodyLootTransferEvent = remotes:WaitForChild(Net.BodyLootTransferRequestEventName) :: RemoteEvent
 local stashActionEvent = remotes:FindFirstChild(Net.LobbyStashActionEventName) :: RemoteEvent?
-local purchaseTrapLogEvent = remotes:FindFirstChild(Net.PurchaseTrapLogEventName) :: RemoteEvent?
 
 type DragState = {
 	itemId: string,
@@ -141,43 +141,6 @@ local function useInventoryVisible()
 	end, {})
 
 	return visible
-end
-
-local function usePurchaseTrapLogs()
-	local logs, setLogs = React.useState({} :: {any})
-
-	React.useEffect(function()
-		if not purchaseTrapLogEvent then
-			return
-		end
-
-		local conn = purchaseTrapLogEvent.OnClientEvent:Connect(function(entry)
-			if typeof(entry) ~= "table" then
-				return
-			end
-
-			setLogs(function(previous)
-				local nextLogs = table.clone(previous)
-				table.insert(nextLogs, 1, {
-					timestamp = entry.timestamp,
-					eventName = entry.eventName,
-					firstNumericId = entry.firstNumericId,
-					argsText = entry.argsText,
-					message = entry.message,
-				})
-				while #nextLogs > 40 do
-					table.remove(nextLogs)
-				end
-				return nextLogs
-			end)
-		end)
-
-		return function()
-			conn:Disconnect()
-		end
-	end, {})
-
-	return logs
 end
 
 local function useLootPrompt()
@@ -565,52 +528,6 @@ local function itemLabel(snapshot: any, itemId: string?): string
 	return item.templateId
 end
 
-local function hotbarSlot(index: number, text: string, selected: boolean, compact: boolean?, onActivated: (() -> ())?)
-	local slotSize = if compact then 46 else 56
-	return React.createElement("TextButton", {
-		Size = UDim2.fromOffset(slotSize, slotSize),
-		BackgroundTransparency = if selected then 0.35 else 0.7,
-		BackgroundColor3 = if selected then Color3.fromRGB(120, 95, 40) else Color3.fromRGB(20, 20, 20),
-		BorderSizePixel = 0,
-		AutoButtonColor = onActivated ~= nil,
-		Text = "",
-		[React.Event.Activated] = function()
-			if onActivated then
-				onActivated()
-			end
-		end,
-	}, {
-		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
-		Stroke = React.createElement("UIStroke", {
-			Thickness = if selected then 2 else 1,
-			Transparency = if selected then 0 else 0.25,
-			Color = Color3.fromRGB(255, 225, 130),
-		}),
-		Key = React.createElement("TextLabel", {
-			AnchorPoint = Vector2.new(0, 0),
-			Position = UDim2.fromOffset(6, 4),
-			Size = UDim2.fromOffset(16, 14),
-			BackgroundTransparency = 1,
-			Text = tostring(index),
-			Font = Enum.Font.GothamBold,
-			TextSize = if compact then 11 else 12,
-			TextColor3 = Color3.fromRGB(220, 220, 220),
-			TextXAlignment = Enum.TextXAlignment.Left,
-		}),
-		Name = React.createElement("TextLabel", {
-			AnchorPoint = Vector2.new(0.5, 1),
-			Position = UDim2.new(0.5, 0, 1, -6),
-			Size = UDim2.new(1, -8, 0, 28),
-			BackgroundTransparency = 1,
-			Text = text,
-			TextWrapped = true,
-			Font = Enum.Font.Gotham,
-			TextSize = if compact then 9 else 11,
-			TextColor3 = Color3.new(1, 1, 1),
-		}),
-	})
-end
-
 local function listCard(title: string, lines: {string}, position: UDim2, size: UDim2)
 	local children: {[string]: any} = {
 		Layout = React.createElement("UIListLayout", {
@@ -696,8 +613,8 @@ local function mobileActionButton(text: string, position: UDim2, size: UDim2, on
 		AnchorPoint = anchorPoint or Vector2.new(1, 1),
 		Position = position,
 		Size = size,
-		BackgroundColor3 = Color3.fromRGB(18, 18, 18),
-		BackgroundTransparency = 0.12,
+		BackgroundColor3 = Color3.fromRGB(12, 14, 18),
+		BackgroundTransparency = 0.28,
 		BorderSizePixel = 0,
 		Text = text,
 		Font = Enum.Font.GothamBold,
@@ -708,9 +625,16 @@ local function mobileActionButton(text: string, position: UDim2, size: UDim2, on
 		[React.Event.Activated] = onActivated,
 	}, {
 		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
+		Fill = React.createElement("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 34, 42)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 14, 18)),
+			}),
+		}),
 		Stroke = React.createElement("UIStroke", {
 			Thickness = 1,
-			Transparency = 0.1,
+			Transparency = 0.18,
 			Color = Color3.fromRGB(255, 225, 130),
 		}),
 	})
@@ -721,8 +645,8 @@ local function mobileRoundButton(text: string, position: UDim2, diameter: number
 		AnchorPoint = anchorPoint or Vector2.new(1, 1),
 		Position = position,
 		Size = UDim2.fromOffset(diameter, diameter),
-		BackgroundColor3 = Color3.fromRGB(18, 18, 18),
-		BackgroundTransparency = 0.08,
+		BackgroundColor3 = Color3.fromRGB(12, 14, 18),
+		BackgroundTransparency = 0.24,
 		BorderSizePixel = 0,
 		Text = text,
 		Font = Enum.Font.GothamBold,
@@ -733,9 +657,16 @@ local function mobileRoundButton(text: string, position: UDim2, diameter: number
 		[React.Event.Activated] = onActivated,
 	}, {
 		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
+		Fill = React.createElement("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(36, 40, 50)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 14, 18)),
+			}),
+		}),
 		Stroke = React.createElement("UIStroke", {
 			Thickness = 1,
-			Transparency = 0.08,
+			Transparency = 0.16,
 			Color = Color3.fromRGB(255, 225, 130),
 		}),
 	})
@@ -855,6 +786,125 @@ local function containerSlot(
 	})
 end
 
+local function containerGridSlot(
+	snapshot: any,
+	itemId: string?,
+	slotIndex: number,
+	isDragging: boolean,
+	isHovered: boolean,
+	isSelected: boolean,
+	onActivate: (() -> ())?,
+	onDragStart: (() -> ())?,
+	onHoverChanged: ((boolean) -> ())?,
+	onRightClick: (() -> ())?,
+	compact: boolean?
+)
+	local item = if snapshot and itemId then snapshot.itemsById[itemId] else nil
+	local isOccupied = itemId ~= nil
+	local accentColor = if isSelected
+		then Color3.fromRGB(255, 225, 130)
+		elseif isHovered
+		then Color3.fromRGB(200, 170, 86)
+		elseif isOccupied
+		then Color3.fromRGB(74, 88, 104)
+		else Color3.fromRGB(52, 56, 64)
+	local categoryText = if item and item.category then string.upper(tostring(item.category)) else "EMPTY"
+	local nameText = if isOccupied then itemLabel(snapshot, itemId) else "Empty Slot"
+
+	return React.createElement("TextButton", {
+		LayoutOrder = slotIndex,
+		Size = UDim2.fromScale(1, 1),
+		AutoButtonColor = false,
+		BackgroundTransparency = if isSelected then 0.08 elseif isHovered then 0.12 elseif isDragging then 0.18 else 0.22,
+		BackgroundColor3 = if isSelected
+			then Color3.fromRGB(34, 32, 22)
+			elseif isHovered
+			then Color3.fromRGB(30, 28, 22)
+			elseif isDragging
+			then Color3.fromRGB(32, 32, 32)
+			else Color3.fromRGB(16, 18, 22),
+		BorderSizePixel = 0,
+		Text = "",
+		[React.Event.MouseEnter] = function()
+			if onHoverChanged then
+				onHoverChanged(true)
+			end
+		end,
+		[React.Event.MouseLeave] = function()
+			if onHoverChanged then
+				onHoverChanged(false)
+			end
+		end,
+		[React.Event.Activated] = function()
+			if onActivate then
+				onActivate()
+			elseif onDragStart then
+				onDragStart()
+			end
+		end,
+		[React.Event.MouseButton2Click] = function()
+			if onRightClick then
+				onRightClick()
+			end
+		end,
+	}, {
+		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, if compact then 8 else 10) }),
+		Fill = React.createElement("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, if isSelected then Color3.fromRGB(42, 38, 24) else Color3.fromRGB(24, 28, 34)),
+				ColorSequenceKeypoint.new(1, if isSelected then Color3.fromRGB(16, 15, 12) else Color3.fromRGB(10, 12, 16)),
+			}),
+		}),
+		Stroke = React.createElement("UIStroke", {
+			Thickness = if isSelected or isHovered then 1.5 else 1,
+			Transparency = if isSelected then 0.02 elseif isHovered then 0.08 else 0.22,
+			Color = if isSelected or isHovered then Color3.fromRGB(255, 225, 130) else Color3.fromRGB(76, 84, 96),
+		}),
+		TopAccent = React.createElement("Frame", {
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.new(1, 0, 0, 3),
+			BackgroundColor3 = accentColor,
+			BorderSizePixel = 0,
+		}, {
+			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
+		}),
+		SlotIndex = React.createElement("TextLabel", {
+			Position = UDim2.fromOffset(10, 8),
+			Size = UDim2.new(0, 42, 0, 14),
+			BackgroundTransparency = 1,
+			Text = string.format("[%02d]", slotIndex),
+			Font = Enum.Font.Code,
+			TextSize = if compact then 10 else 11,
+			TextColor3 = Color3.fromRGB(255, 225, 130),
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}),
+		Category = React.createElement("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -10, 0, 8),
+			Size = UDim2.new(0, if compact then 62 else 74, 0, 16),
+			BackgroundTransparency = 1,
+			Text = categoryText,
+			Font = Enum.Font.Code,
+			TextSize = if compact then 9 else 10,
+			TextColor3 = if isOccupied then Color3.fromRGB(184, 194, 206) else Color3.fromRGB(124, 128, 136),
+			TextXAlignment = Enum.TextXAlignment.Right,
+		}),
+		Name = React.createElement("TextLabel", {
+			Position = UDim2.fromOffset(10, if compact then 28 else 30),
+			Size = UDim2.new(1, -20, 1, if compact then -36 else -40),
+			BackgroundTransparency = 1,
+			Text = nameText,
+			Font = Enum.Font.GothamBold,
+			TextSize = if compact then 12 else 13,
+			TextWrapped = true,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			TextColor3 = if isOccupied then Color3.new(1, 1, 1) else Color3.fromRGB(148, 152, 158),
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}),
+	})
+end
+
 local function containerCard(
 	title: string,
 	containerName: string,
@@ -867,14 +917,19 @@ local function containerCard(
 	setHoverState: (HoverState?) -> (),
 	setDragState: (DragState?) -> (),
 	openContextMenuForItem: (string, string, string, string?) -> (),
+	moveDraggedItemToCell: ((string, number?) -> ())?,
+	activateGridItem: ((string, string) -> ())?,
+	draggedItem: any?,
 	compact: boolean?,
-	allowDrag: boolean?
+	allowDrag: boolean?,
+	displayMode: string?
 )
 	local container = snapshot and snapshot[containerName] or nil
 	local capacity = if container then container.capacity else 0
 	local itemIds = if container then container.itemIds else {}
-
-	local children: {[string]: any} = {
+	local useGrid = displayMode == "grid"
+	local gridCellPixels = if compact then (if containerName == "stash" then 30 else 42) else if containerName == "stash" then 46 else 54
+	local children: {[string]: any} = if useGrid then {} else {
 		Layout = React.createElement("UIListLayout", {
 			FillDirection = Enum.FillDirection.Vertical,
 			Padding = UDim.new(0, if compact then 4 else 6),
@@ -882,28 +937,234 @@ local function containerCard(
 		}),
 	}
 
-	for slotIndex = 1, capacity do
-		local itemId = itemIds[slotIndex]
-		if itemId == "" then
-			itemId = nil
-		end
-		local isOccupied = itemId ~= nil
-		local isHovered = hoverState ~= nil
-			and hoverState.toContainer == containerName
-			and hoverState.toIndex == slotIndex
-		local isDragging = dragState ~= nil and dragState.itemId == itemId
+	if useGrid then
+		local packedItems, occupiedCells, columns, rows = InventoryGrid.pack(itemIds, snapshot and snapshot.itemsById or nil, capacity, containerName)
+		local previewCells: {[number]: boolean} = {}
+		local previewValid = false
+		if dragState and hoverState and hoverState.toContainer == containerName and hoverState.toIndex and draggedItem then
+			local anchorIndex = hoverState.toIndex
+			local anchorX = ((anchorIndex - 1) % columns) + 1
+			local anchorY = math.floor((anchorIndex - 1) / columns) + 1
+			local previewSize = InventoryGrid.getItemSize(draggedItem)
+			local ignoreItemId = if dragState.sourceKind == "player" and dragState.fromContainer == containerName then dragState.itemId else nil
+			previewValid = InventoryGrid.canFitAt(
+				itemIds,
+				snapshot and snapshot.itemsById or nil,
+				capacity,
+				containerName,
+				draggedItem,
+				anchorIndex,
+				ignoreItemId
+			)
 
-		children["Slot" .. slotIndex] = containerSlot(
-			if isOccupied then itemLabel(snapshot, itemId) else string.format("[%d] Empty", slotIndex),
-			slotIndex,
-			isOccupied,
-			isDragging,
-			isHovered,
-			selectedItemId ~= nil and selectedItemId == itemId,
-			if isOccupied and compact then function()
+			for yy = anchorY, math.min(rows, anchorY + previewSize.height - 1) do
+				for xx = anchorX, math.min(columns, anchorX + previewSize.width - 1) do
+					local previewIndex = (yy - 1) * columns + xx
+					if previewIndex >= 1 and previewIndex <= capacity then
+						previewCells[previewIndex] = true
+					end
+				end
+			end
+		end
+
+		local cellChildren: {[string]: any} = {}
+		for slotIndex = 1, capacity do
+			local x = ((slotIndex - 1) % columns) + 1
+			local y = math.floor((slotIndex - 1) / columns) + 1
+			local cellHovered = hoverState ~= nil and hoverState.toContainer == containerName and hoverState.toIndex == slotIndex
+			local cellPreviewed = previewCells[slotIndex] == true
+			cellChildren["Cell" .. slotIndex] = React.createElement("Frame", {
+				Position = UDim2.fromOffset((x - 1) * gridCellPixels, (y - 1) * gridCellPixels),
+				Size = UDim2.fromOffset(gridCellPixels, gridCellPixels),
+				BackgroundColor3 = if cellPreviewed and previewValid
+					then Color3.fromRGB(39, 58, 34)
+					elseif cellPreviewed
+					then Color3.fromRGB(78, 30, 30)
+					elseif cellHovered
+					then Color3.fromRGB(56, 46, 24)
+					elseif occupiedCells[slotIndex]
+					then Color3.fromRGB(18, 20, 24)
+					else Color3.fromRGB(8, 9, 11),
+				BackgroundTransparency = if cellPreviewed or cellHovered then 0.0 else 0.04,
+				BorderSizePixel = 0,
+				ZIndex = 1,
+			}, {
+				Stroke = React.createElement("UIStroke", {
+					Thickness = if cellPreviewed or cellHovered then 2 else 1,
+					Transparency = if cellPreviewed or cellHovered then 0.05 else 0.38,
+					Color = if cellPreviewed and previewValid
+						then Color3.fromRGB(112, 220, 124)
+						elseif cellPreviewed
+						then Color3.fromRGB(235, 92, 82)
+						elseif cellHovered
+						then Color3.fromRGB(255, 225, 130)
+						else Color3.fromRGB(47, 54, 64),
+				}),
+				Target = React.createElement("TextButton", {
+					Position = UDim2.fromOffset(0, 0),
+					Size = UDim2.fromScale(1, 1),
+					BackgroundTransparency = 1,
+					Text = "",
+					AutoButtonColor = false,
+					ZIndex = 2,
+					[React.Event.MouseEnter] = function()
+						if dragState and allowDrag ~= false then
+							setHoverState({
+								toContainer = containerName,
+								toIndex = slotIndex,
+							})
+						end
+					end,
+					[React.Event.MouseLeave] = function()
+						if cellHovered then
+							setHoverState(nil)
+						end
+					end,
+					[React.Event.Activated] = function()
+						if dragState and allowDrag ~= false and moveDraggedItemToCell then
+							moveDraggedItemToCell(containerName, if cellPreviewed and hoverState then hoverState.toIndex else slotIndex)
+						end
+					end,
+				}),
+			})
+		end
+
+		local itemChildren: {[string]: any} = {}
+		for index, packed in ipairs(packedItems) do
+			local itemId = packed.itemId
+			local item = snapshot and snapshot.itemsById and snapshot.itemsById[itemId] or nil
+			local categoryText = if item and item.category then string.upper(tostring(item.category)) else "ITEM"
+			local isSelected = selectedItemId ~= nil and selectedItemId == itemId
+			local isDragging = dragState ~= nil and dragState.itemId == itemId
+			local isHovered = hoverState ~= nil and hoverState.toContainer == containerName and hoverState.toIndex == nil
+			local titleHeight = math.max(16, math.min(26, packed.height * gridCellPixels - 20))
+
+			itemChildren["Item" .. index] = React.createElement("TextButton", {
+				Position = UDim2.fromOffset((packed.x - 1) * gridCellPixels + 1, (packed.y - 1) * gridCellPixels + 1),
+				Size = UDim2.fromOffset(packed.width * gridCellPixels - 2, packed.height * gridCellPixels - 2),
+				BackgroundColor3 = if isSelected
+					then Color3.fromRGB(38, 34, 22)
+					elseif isDragging
+					then Color3.fromRGB(34, 34, 34)
+					else Color3.fromRGB(14, 16, 20),
+				BackgroundTransparency = if isDragging then 0.28 else 0.02,
+				BorderSizePixel = 0,
+				Text = "",
+				AutoButtonColor = itemId ~= nil,
+				ZIndex = 3,
+				[React.Event.MouseEnter] = function()
+					if dragState and allowDrag ~= false then
+						setHoverState({
+							toContainer = containerName,
+							toIndex = ((packed.y - 1) * columns) + packed.x,
+						})
+					end
+				end,
+				[React.Event.MouseLeave] = function()
+					if isHovered then
+						setHoverState(nil)
+					end
+				end,
+				[React.Event.Activated] = function()
+					if dragState and allowDrag ~= false and moveDraggedItemToCell then
+						if dragState.itemId == itemId and activateGridItem then
+							activateGridItem(itemId, containerName)
+							return
+						end
+						moveDraggedItemToCell(containerName, ((packed.y - 1) * columns) + packed.x)
+						return
+					end
+					if compact then
+						openContextMenuForItem(itemId, "player", containerName, nil)
+					elseif activateGridItem then
+						activateGridItem(itemId, containerName)
+					elseif allowDrag ~= false then
+						setDragState({
+							itemId = itemId,
+							fromContainer = containerName,
+							sourceKind = "player",
+							bodyId = nil,
+						})
+						setHoverState({
+							toContainer = containerName,
+							toIndex = nil,
+						})
+					else
+						openContextMenuForItem(itemId, "player", containerName, nil)
+					end
+				end,
+				[React.Event.MouseButton2Click] = function()
+					openContextMenuForItem(itemId, "player", containerName, nil)
+				end,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 4) }),
+				Fill = React.createElement("UIGradient", {
+					Rotation = 90,
+					Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0, if isSelected then Color3.fromRGB(46, 40, 24) else Color3.fromRGB(25, 29, 35)),
+						ColorSequenceKeypoint.new(1, if isSelected then Color3.fromRGB(14, 13, 10) else Color3.fromRGB(8, 10, 13)),
+					}),
+				}),
+				Stroke = React.createElement("UIStroke", {
+					Thickness = if isSelected then 2 else 1,
+					Transparency = if isSelected then 0.04 else 0.16,
+					Color = if isSelected then Color3.fromRGB(255, 225, 130) else Color3.fromRGB(86, 96, 110),
+				}),
+				Category = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(6, 5),
+					Size = UDim2.new(1, -12, 0, 12),
+					BackgroundTransparency = 1,
+					Text = categoryText,
+					Font = Enum.Font.Code,
+					TextSize = if compact then 8 else 9,
+					TextColor3 = Color3.fromRGB(255, 225, 130),
+					TextXAlignment = Enum.TextXAlignment.Left,
+					ZIndex = 4,
+				}),
+				Name = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(6, 20),
+					Size = UDim2.new(1, -12, 0, titleHeight),
+					BackgroundTransparency = 1,
+					Text = itemLabel(snapshot, itemId),
+					Font = Enum.Font.GothamBold,
+					TextSize = if compact then 10 else 12,
+					TextWrapped = true,
+					TextColor3 = Color3.fromRGB(236, 238, 241),
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top,
+					ZIndex = 4,
+				}),
+			})
+		end
+
+		children.Cells = React.createElement("Frame", {
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(columns * gridCellPixels, rows * gridCellPixels),
+			BackgroundTransparency = 1,
+			ZIndex = 1,
+		}, cellChildren)
+		children.Items = React.createElement("Frame", {
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(columns * gridCellPixels, rows * gridCellPixels),
+			BackgroundTransparency = 1,
+			ZIndex = 2,
+		}, itemChildren)
+	else
+		for slotIndex = 1, capacity do
+			local itemId = itemIds[slotIndex]
+			if itemId == "" then
+				itemId = nil
+			end
+			local isOccupied = itemId ~= nil
+			local isHovered = hoverState ~= nil
+				and hoverState.toContainer == containerName
+				and hoverState.toIndex == slotIndex
+			local isDragging = dragState ~= nil and dragState.itemId == itemId
+
+			local onActivate = if isOccupied and compact then function()
 				openContextMenuForItem(itemId :: string, "player", containerName, nil)
-			end else nil,
-			if isOccupied and allowDrag ~= false then function()
+			end else nil
+			local onDragStart = if isOccupied and allowDrag ~= false then function()
 				setDragState({
 					itemId = itemId :: string,
 					fromContainer = containerName,
@@ -914,8 +1175,8 @@ local function containerCard(
 					toContainer = containerName,
 					toIndex = slotIndex,
 				})
-			end else nil,
-			if dragState and allowDrag ~= false then function(isInside)
+			end else nil
+			local onHoverChanged = if dragState and allowDrag ~= false then function(isInside)
 				if isInside then
 					setHoverState({
 						toContainer = containerName,
@@ -924,12 +1185,25 @@ local function containerCard(
 				elseif isHovered then
 					setHoverState(nil)
 				end
-			end else nil,
-			if isOccupied then function()
+			end else nil
+			local onRightClick = if isOccupied then function()
 				openContextMenuForItem(itemId :: string, "player", containerName, nil)
-			end else nil,
-			compact
-		)
+			end else nil
+
+			children["Slot" .. slotIndex] = containerSlot(
+				if isOccupied then itemLabel(snapshot, itemId) else string.format("[%d] Empty", slotIndex),
+				slotIndex,
+				isOccupied,
+				isDragging,
+				isHovered,
+				selectedItemId ~= nil and selectedItemId == itemId,
+				onActivate,
+				onDragStart,
+				onHoverChanged,
+				onRightClick,
+				compact
+			)
+		end
 	end
 
 	return React.createElement("Frame", {
@@ -969,12 +1243,25 @@ local function containerCard(
 			TextColor3 = Color3.fromRGB(255, 225, 130),
 			TextXAlignment = Enum.TextXAlignment.Left,
 		}),
+		Count = if useGrid then React.createElement("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -10, 0, 8),
+			Size = UDim2.new(0, if compact then 72 else 86, 0, 16),
+			BackgroundTransparency = 1,
+			Text = string.format("%d/%d", InventoryGrid.countUsedUnits(itemIds, snapshot and snapshot.itemsById or nil), capacity),
+			Font = Enum.Font.Code,
+			TextSize = if compact then 10 else 11,
+			TextColor3 = Color3.fromRGB(255, 225, 130),
+			TextXAlignment = Enum.TextXAlignment.Right,
+		}) else nil,
 		List = React.createElement("ScrollingFrame", {
-			Position = UDim2.fromOffset(10, if compact then 30 else 34),
-			Size = UDim2.new(1, -20, 1, if compact then -38 else -44),
+			Position = UDim2.fromOffset(10, if useGrid then 34 else (if compact then 30 else 34)),
+			Size = UDim2.new(1, -20, 1, if useGrid then -44 else (if compact then -38 else -44)),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-			CanvasSize = UDim2.new(0, 0, 0, math.max(0, capacity * (if compact then 26 else 30))),
+			CanvasSize = if useGrid
+				then UDim2.new(0, 0, 0, math.ceil(math.max(1, capacity) / InventoryGrid.getContainerColumns(capacity, containerName)) * gridCellPixels)
+				else UDim2.new(0, 0, 0, math.max(0, capacity * (if compact then 26 else 30))),
 			AutomaticCanvasSize = Enum.AutomaticSize.Y,
 			ScrollingDirection = Enum.ScrollingDirection.Y,
 			ScrollBarThickness = if compact then 4 else 6,
@@ -1095,48 +1382,185 @@ local function weaponSlotCard(
 		{ label = "Melee", itemId = snapshot and snapshot.weaponSlots.Melee or nil },
 	}
 
-	local children: {[string]: any} = {
+	local useGrid = not compact
+	local children: {[string]: any} = if useGrid then {} else {
 		Layout = React.createElement("UIListLayout", {
 			FillDirection = Enum.FillDirection.Vertical,
-			Padding = UDim.new(0, if compact then 4 else 6),
+			Padding = UDim.new(0, 4),
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
 	}
 
-	for index, row in ipairs(rows) do
-		local itemId = row.itemId
-		if itemId == "" then
-			itemId = nil
+	if useGrid then
+		local function attachmentBay(label: string, order: number, filledText: string?)
+			return React.createElement("Frame", {
+				LayoutOrder = order,
+				Size = UDim2.fromOffset(38, 38),
+				BackgroundColor3 = if filledText then Color3.fromRGB(18, 48, 34) else Color3.fromRGB(10, 12, 15),
+				BackgroundTransparency = 0.04,
+				BorderSizePixel = 0,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 4) }),
+				Stroke = React.createElement("UIStroke", {
+					Thickness = 1,
+					Transparency = if filledText then 0.06 else 0.36,
+					Color = if filledText then Color3.fromRGB(58, 220, 130) else Color3.fromRGB(66, 74, 84),
+				}),
+				Label = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(3, 3),
+					Size = UDim2.new(1, -6, 0, 10),
+					BackgroundTransparency = 1,
+					Text = string.upper(label),
+					Font = Enum.Font.Code,
+					TextSize = 7,
+					TextColor3 = Color3.fromRGB(255, 225, 130),
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Value = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(4, 15),
+					Size = UDim2.new(1, -8, 1, -18),
+					BackgroundTransparency = 1,
+					Text = filledText or "",
+					Font = Enum.Font.GothamBold,
+					TextSize = 8,
+					TextWrapped = true,
+					TextColor3 = Color3.fromRGB(230, 235, 232),
+					TextXAlignment = Enum.TextXAlignment.Center,
+					TextYAlignment = Enum.TextYAlignment.Center,
+				}),
+			})
 		end
-		children["Slot" .. index] = containerSlot(
-			string.format("%s: %s", row.label, itemLabel(snapshot, itemId)),
-			index,
-			itemId ~= nil,
-			false,
-			false,
-			selectedItemId ~= nil and selectedItemId == itemId,
-			if itemId and compact then function()
-				openContextMenuForItem(itemId, "player", row.label, nil)
-			end else nil,
-			nil,
-			nil,
-			if itemId then function()
-				openContextMenuForItem(itemId, "player", row.label, nil)
-			end else nil,
-			compact
-		)
-	end
 
-	children.Equipped = React.createElement("TextLabel", {
-		LayoutOrder = 99,
-		Size = UDim2.new(1, 0, 0, if compact then 20 else 22),
-		BackgroundTransparency = 1,
-		Text = string.format("Equipped: %s", snapshot and (snapshot.equippedSlot or "None") or "None"),
-		Font = Enum.Font.Code,
-		TextSize = if compact then 12 else 14,
-		TextColor3 = Color3.new(1, 1, 1),
-		TextXAlignment = Enum.TextXAlignment.Left,
-	})
+		local function equipmentCard(row: any, position: UDim2, cardSize: UDim2, isLarge: boolean)
+			local itemId = row.itemId
+			if itemId == "" then
+				itemId = nil
+			end
+			local item = itemId and snapshot and snapshot.itemsById and snapshot.itemsById[itemId] or nil
+			local attachedMagId = item and item.attachedMagId or nil
+			local attachedMag = attachedMagId and snapshot and snapshot.itemsById and snapshot.itemsById[attachedMagId] or nil
+			local isEquipped = snapshot and snapshot.equippedSlot == row.label
+
+			return React.createElement("TextButton", {
+				Position = position,
+				Size = cardSize,
+				BackgroundColor3 = if isEquipped then Color3.fromRGB(20, 52, 36) elseif selectedItemId ~= nil and selectedItemId == itemId then Color3.fromRGB(38, 34, 22) else Color3.fromRGB(12, 14, 18),
+				BackgroundTransparency = 0.04,
+				BorderSizePixel = 0,
+				Text = "",
+				AutoButtonColor = itemId ~= nil,
+				[React.Event.Activated] = function()
+					if itemId then
+						openContextMenuForItem(itemId, "player", row.label, nil)
+					end
+				end,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Fill = React.createElement("UIGradient", {
+					Rotation = 90,
+					Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0, if isEquipped then Color3.fromRGB(20, 84, 52) else Color3.fromRGB(22, 25, 31)),
+						ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 8, 11)),
+					}),
+				}),
+				Stroke = React.createElement("UIStroke", {
+					Thickness = if isEquipped or selectedItemId == itemId then 2 else 1,
+					Transparency = if isEquipped or selectedItemId == itemId then 0.03 else 0.22,
+					Color = if isEquipped then Color3.fromRGB(58, 220, 130) elseif selectedItemId == itemId then Color3.fromRGB(255, 225, 130) else Color3.fromRGB(76, 84, 96),
+				}),
+				Title = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(10, 8),
+					Size = UDim2.new(1, -20, 0, 13),
+					BackgroundTransparency = 1,
+					Text = string.format("[%d] %s", if row.label == "PrimaryA" then 1 elseif row.label == "PrimaryB" then 2 elseif row.label == "Pistol" then 3 else 4, string.upper(row.label)),
+					Font = Enum.Font.Code,
+					TextSize = 9,
+					TextColor3 = Color3.fromRGB(255, 225, 130),
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}),
+				Value = React.createElement("TextLabel", {
+					Position = UDim2.fromOffset(12, if isLarge then 30 else 28),
+					Size = if isLarge then UDim2.new(1, -186, 1, -40) else UDim2.new(1, -24, 0, 26),
+					BackgroundTransparency = 1,
+					Text = itemLabel(snapshot, itemId),
+					Font = Enum.Font.GothamBold,
+					TextSize = if isLarge then 15 else 12,
+					TextWrapped = true,
+					TextColor3 = if itemId then Color3.new(1, 1, 1) else Color3.fromRGB(150, 154, 160),
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top,
+				}),
+				Active = if isEquipped then React.createElement("TextLabel", {
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, 8),
+					Size = UDim2.fromOffset(90, 14),
+					BackgroundTransparency = 1,
+					Text = "ACTIVE",
+					Font = Enum.Font.Code,
+					TextSize = 10,
+					TextColor3 = Color3.fromRGB(58, 220, 130),
+					TextXAlignment = Enum.TextXAlignment.Right,
+				}) else nil,
+				AttachmentBays = if isLarge then React.createElement("Frame", {
+					AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -10, 0, 30),
+					Size = UDim2.fromOffset(168, 86),
+					BackgroundTransparency = 1,
+				}, {
+					Layout = React.createElement("UIGridLayout", {
+						CellSize = UDim2.fromOffset(38, 38),
+						CellPadding = UDim2.fromOffset(5, 5),
+						SortOrder = Enum.SortOrder.LayoutOrder,
+					}),
+					Mag = attachmentBay("MAG", 1, attachedMag and tostring(attachedMag.ammo or "--") or nil),
+					Optic = attachmentBay("OPTIC", 2, nil),
+					Muzzle = attachmentBay("MUZ", 3, nil),
+					Tac = attachmentBay("TAC", 4, nil),
+				}) else nil,
+			})
+		end
+
+		children.PrimaryA = equipmentCard(rows[1], UDim2.fromOffset(10, 36), UDim2.new(0.58, -18, 0, 68), true)
+		children.PrimaryB = equipmentCard(rows[2], UDim2.fromOffset(10, 112), UDim2.new(0.58, -18, 0, 68), true)
+		children.Pistol = equipmentCard(rows[3], UDim2.new(0.58, 4, 0, 36), UDim2.new(0.42, -14, 0, 68), false)
+		children.Melee = equipmentCard(rows[4], UDim2.new(0.58, 4, 0, 112), UDim2.new(0.42, -14, 0, 68), false)
+	else
+		for index, row in ipairs(rows) do
+			local itemId = row.itemId
+			if itemId == "" then
+				itemId = nil
+			end
+
+			children["Slot" .. index] = containerSlot(
+				string.format("%s: %s", row.label, itemLabel(snapshot, itemId)),
+				index,
+				itemId ~= nil,
+				false,
+				false,
+				selectedItemId ~= nil and selectedItemId == itemId,
+				if itemId and compact then function()
+					openContextMenuForItem(itemId, "player", row.label, nil)
+				end else nil,
+				nil,
+				nil,
+				if itemId then function()
+					openContextMenuForItem(itemId, "player", row.label, nil)
+				end else nil,
+				compact
+			)
+		end
+
+		children.Equipped = React.createElement("TextLabel", {
+			LayoutOrder = 99,
+			Size = UDim2.new(1, 0, 0, if compact then 20 else 22),
+			BackgroundTransparency = 1,
+			Text = string.format("Equipped: %s", snapshot and (snapshot.equippedSlot or "None") or "None"),
+			Font = Enum.Font.Code,
+			TextSize = if compact then 12 else 14,
+			TextColor3 = Color3.new(1, 1, 1),
+			TextXAlignment = Enum.TextXAlignment.Left,
+		})
+	end
 
 	return React.createElement("Frame", {
 		AnchorPoint = Vector2.new(0, 0),
@@ -1156,15 +1580,15 @@ local function weaponSlotCard(
 			Position = UDim2.fromOffset(10, 8),
 			Size = UDim2.new(1, -20, 0, if compact then 20 else 22),
 			BackgroundTransparency = 1,
-			Text = "Weapon Slots",
+			Text = "Equipment",
 			Font = Enum.Font.GothamBold,
 			TextSize = if compact then 13 else 15,
 			TextColor3 = Color3.fromRGB(255, 225, 130),
 			TextXAlignment = Enum.TextXAlignment.Left,
 		}),
 		List = React.createElement("Frame", {
-			Position = UDim2.fromOffset(10, if compact then 30 else 34),
-			Size = UDim2.new(1, -20, 1, if compact then -38 else -44),
+			Position = if useGrid then UDim2.fromOffset(0, 0) else UDim2.fromOffset(10, if compact then 30 else 34),
+			Size = if useGrid then UDim2.fromScale(1, 1) else UDim2.new(1, -20, 1, if compact then -38 else -44),
 			BackgroundTransparency = 1,
 		}, children),
 	})
@@ -1338,20 +1762,20 @@ local function HudApp()
 	local lootPrompt = useLootPrompt()
 	local raidState = useRaidState()
 	local bodyLootSnapshot = useBodyLootSnapshot()
-	local purchaseTrapLogs = usePurchaseTrapLogs()
 	local timedCheckMagText = useTimedCheckMagText(snapshot)
 	local loadingOverlayTransparency, loadingOverlayText, loadingOverlayDetailText, isRaidLoading, loadingSpinnerFrame, loadingChecklist, loadingActiveMarkerVisible = useRaidLoadingOverlay(raidState, snapshot)
 	local dragState, setDragState = React.useState(nil :: DragState?)
 	local hoverState, setHoverState = React.useState(nil :: HoverState?)
 	local selectedItemId, setSelectedItemId = React.useState(nil :: string?)
 	local selectedItemSource, setSelectedItemSource = React.useState(nil :: SelectedItemSource?)
+	local lastGridClickRef = React.useRef({ itemId = "", clickedAt = 0 })
 	local menuOpen, setMenuOpen = React.useState(false)
 	local menuPosition, setMenuPosition = React.useState(UDim2.fromOffset(0, 0))
 	local extractsVisible, setExtractsVisible = React.useState(false)
 	local mobileUtilityOpen, setMobileUtilityOpen = React.useState(false)
 	local mobileInventoryPage, setMobileInventoryPage = React.useState(1)
-	local debugLogOpen, setDebugLogOpen = React.useState(false)
 	local isWaitingForPlayers = raidState ~= nil and raidState.phase == "WaitingForPlayers"
+	local isExtracting = raidState ~= nil and raidState.phase == "Extracting"
 	local isLobbyStashView = isLobbyPlace and snapshot ~= nil and typeof(snapshot.stash) == "table"
 	local shouldShowRaidTimer = raidState ~= nil
 		and typeof(raidState.raidEndTime) == "number"
@@ -1362,26 +1786,16 @@ local function HudApp()
 		and raidState ~= nil
 		and (raidState.phase == "InRaid" or raidState.phase == "Extracting")
 	local shouldRenderLoadingOverlay = (isRaidLoading or isWaitingForPlayers or loadingOverlayTransparency < 0.98)
+		and not isExtracting
 		and not (raidState and raidState.phase == "InRaid" and raidState.playerCanFight == true)
 	local isLeavingRaid = raidState ~= nil and raidState.phase == "LeavingRaid"
 
 	local hpText = string.format("HP %d/%d", math.floor(health + 0.5), math.floor(maxHealth + 0.5))
 
-	local hotbarItemIds: {string?} = { nil, nil, nil, nil, nil }
-	local equippedIndex = 0
 	local ammoText = "AMMO -/-"
 
 	if snapshot then
-		for i = 1, 5 do
-			hotbarItemIds[i] = snapshot.hotbarItemIds and snapshot.hotbarItemIds[i] or nil
-		end
-
 		local slot = snapshot.equippedSlot
-		if slot == "PrimaryA" then equippedIndex = 1 end
-		if slot == "PrimaryB" then equippedIndex = 2 end
-		if slot == "Pistol" then equippedIndex = 3 end
-		if slot == "Melee" then equippedIndex = 4 end
-
 		local equippedItemId = slot and snapshot.weaponSlots and snapshot.weaponSlots[slot] or nil
 		local equippedItem = equippedItemId and snapshot.itemsById[equippedItemId] or nil
 		if equippedItem and (equippedItem.category == "gun" or equippedItem.category == "pistol") then
@@ -1392,6 +1806,130 @@ local function HudApp()
 			else
 				ammoText = "AMMO 0/0"
 			end
+		end
+	end
+
+	local activeDragItem = if dragState and dragState.sourceKind == "body" and bodyLootSnapshot
+		then bodyLootSnapshot.itemsById and bodyLootSnapshot.itemsById[dragState.itemId]
+		elseif dragState and snapshot
+		then snapshot.itemsById and snapshot.itemsById[dragState.itemId]
+		else nil
+
+	local function moveDraggedItemToCell(toContainer: string, toIndex: number?)
+		if not dragState then
+			return
+		end
+
+		if isLobbyStashView and not isMobile then
+			if dragState.fromContainer == "stash" then
+				if toContainer == "rig" or toContainer == "backpack" then
+					sendLobbyStashActionRequest({
+						kind = "MoveToInventory",
+						itemId = dragState.itemId,
+						dest = toContainer,
+						destIndex = toIndex,
+					})
+				end
+			elseif toContainer == "stash" then
+				sendLobbyStashActionRequest({
+					kind = "MoveToStash",
+					itemId = dragState.itemId,
+					destIndex = toIndex,
+				})
+			elseif dragState.sourceKind ~= "body" then
+				sendLobbyStashActionRequest({
+					kind = "MoveWithinInventory",
+					itemId = dragState.itemId,
+					dest = toContainer,
+					destIndex = toIndex,
+				})
+			end
+		elseif dragState.sourceKind == "body" and dragState.bodyId then
+			sendBodyLootTransferRequest(dragState.bodyId, dragState.itemId, toContainer, toIndex)
+		else
+			sendMoveItemRequest(dragState.itemId, dragState.fromContainer, toContainer, toIndex)
+		end
+
+		setDragState(nil)
+		setHoverState(nil)
+	end
+
+	local openContextMenuForItem: (string, string, string, string?) -> () = function() end
+
+	local function activateGridItem(itemId: string, containerName: string)
+		if isLobbyStashView and not isMobile then
+			local nowSeconds = os.clock()
+			local lastClick = lastGridClickRef.current
+			local isFastDoubleClick = lastClick.itemId == itemId and (nowSeconds - lastClick.clickedAt) <= 0.28
+			lastGridClickRef.current = {
+				itemId = itemId,
+				clickedAt = nowSeconds,
+			}
+
+			if isFastDoubleClick then
+				if containerName == "stash" then
+					local item = snapshot and snapshot.itemsById and snapshot.itemsById[itemId] or nil
+					local destination = "backpack"
+					if item and (item.category == "gun" or item.category == "pistol" or item.category == "melee") then
+						if item.category == "gun" then
+							destination = if snapshot.weaponSlots and snapshot.weaponSlots.PrimaryA == nil then "primaryA" else "primaryB"
+						elseif item.category == "pistol" then
+							destination = "pistol"
+						else
+							destination = "melee"
+						end
+					elseif item and (item.category == "mag" or item.category == "med") then
+						destination = "rig"
+					end
+					sendLobbyStashActionRequest({
+						kind = "MoveToInventory",
+						itemId = itemId,
+						dest = destination,
+					})
+				elseif containerName == "rig" or containerName == "backpack" then
+					sendLobbyStashActionRequest({
+						kind = "MoveToStash",
+						itemId = itemId,
+					})
+				end
+				setDragState(nil)
+				setHoverState(nil)
+				setMenuOpen(false)
+				return
+			end
+
+			setSelectedItemId(itemId)
+			setSelectedItemSource({
+				sourceKind = "player",
+				containerName = containerName,
+				bodyId = nil,
+			})
+			setDragState({
+				itemId = itemId,
+				fromContainer = containerName,
+				sourceKind = "player",
+				bodyId = nil,
+			})
+			setHoverState({
+				toContainer = containerName,
+				toIndex = nil,
+			})
+			return
+		end
+
+		if not isMobile then
+			setDragState({
+				itemId = itemId,
+				fromContainer = containerName,
+				sourceKind = "player",
+				bodyId = nil,
+			})
+			setHoverState({
+				toContainer = containerName,
+				toIndex = nil,
+			})
+		else
+			openContextMenuForItem(itemId, "player", containerName, nil)
 		end
 	end
 
@@ -1409,48 +1947,11 @@ local function HudApp()
 
 			local activeHover = hoverState
 			if activeHover then
-				if isLobbyStashView and not isMobile then
-					if dragState.fromContainer == "stash" then
-						local targetContainer = activeHover.toContainer
-						if targetContainer == "rig" or targetContainer == "backpack" then
-							sendLobbyStashActionRequest({
-								kind = "MoveToInventory",
-								itemId = dragState.itemId,
-								dest = targetContainer,
-							})
-						end
-					elseif activeHover.toContainer == "stash" then
-						sendLobbyStashActionRequest({
-							kind = "MoveToStash",
-							itemId = dragState.itemId,
-						})
-					elseif dragState.sourceKind ~= "body" then
-						sendMoveItemRequest(
-							dragState.itemId,
-							dragState.fromContainer,
-							activeHover.toContainer,
-							activeHover.toIndex
-						)
-					end
-				elseif dragState.sourceKind == "body" and dragState.bodyId then
-					sendBodyLootTransferRequest(
-						dragState.bodyId,
-						dragState.itemId,
-						activeHover.toContainer,
-						activeHover.toIndex
-					)
-				else
-					sendMoveItemRequest(
-						dragState.itemId,
-						dragState.fromContainer,
-						activeHover.toContainer,
-						activeHover.toIndex
-					)
-				end
+				moveDraggedItemToCell(activeHover.toContainer, activeHover.toIndex)
+			else
+				setDragState(nil)
+				setHoverState(nil)
 			end
-
-			setDragState(nil)
-			setHoverState(nil)
 		end)
 
 		return function()
@@ -1505,14 +2006,32 @@ local function HudApp()
 					return not previous
 				end)
 			end
+
+			if input.KeyCode == Enum.KeyCode.R and inventoryVisible and selectedItemId and selectedItemSource then
+				local selectedContainerName = selectedItemSource.containerName
+				local selectedIsWeaponSlot = selectedContainerName == "PrimaryA"
+					or selectedContainerName == "PrimaryB"
+					or selectedContainerName == "Pistol"
+					or selectedContainerName == "Melee"
+				if selectedItemSource.sourceKind == "player" and not selectedIsWeaponSlot then
+					if isLobbyStashView then
+						sendLobbyStashActionRequest({
+							kind = "RotateItem",
+							itemId = selectedItemId,
+						})
+					else
+						sendItemActionRequest(selectedItemId, "Rotate")
+					end
+				end
+			end
 		end)
 
 		return function()
 			conn:Disconnect()
 		end
-	end, {})
+	end, { inventoryVisible, selectedItemId, selectedItemSource, isLobbyStashView })
 
-	local function openContextMenuForItem(itemId: string, sourceKind: string, containerName: string, bodyId: string?)
+	openContextMenuForItem = function(itemId: string, sourceKind: string, containerName: string, bodyId: string?)
 		local localX: number
 		local localY: number
 		if isMobile then
@@ -1595,19 +2114,18 @@ local function HudApp()
 	local selectedMenuSnapshot = if selectedItemSource and selectedItemSource.sourceKind == "body" then bodyLootSnapshot else snapshot
 	local selectedMenuItem = if selectedMenuSnapshot and selectedItemId then selectedMenuSnapshot.itemsById[selectedItemId] else nil
 
-	local function containerHasSpace(containerData: any): boolean
-		if not containerData then
+	local function containerHasSpace(containerData: any, containerName: string, item: any): boolean
+		if not containerData or not item then
 			return false
 		end
 
-		for slotIndex = 1, containerData.capacity do
-			local itemId = containerData.itemIds[slotIndex]
-			if itemId == nil or itemId == "" then
-				return true
-			end
-		end
-
-		return false
+		return InventoryGrid.canFitItem(
+			containerData.itemIds or {},
+			snapshot and snapshot.itemsById or {},
+			containerData.capacity or 0,
+			containerName,
+			item
+		)
 	end
 
 	local function hasOpenWeaponSlotForItem(item: any): boolean
@@ -1679,8 +2197,25 @@ local function HudApp()
 
 	local menuActions = {}
 	if selectedItemId and selectedItemSource and selectedMenuItem then
+		if selectedItemSource.sourceKind == "player" and not isWeaponSlotContainer(selectedItemSource.containerName) then
+			table.insert(menuActions, {
+				label = "Rotate",
+				run = function()
+					if isLobbyStashView then
+						sendLobbyStashActionRequest({
+							kind = "RotateItem",
+							itemId = selectedItemId,
+						})
+					else
+						sendItemActionRequest(selectedItemId, "Rotate")
+					end
+					closeContextMenu()
+				end,
+			})
+		end
+
 		if selectedItemSource.sourceKind == "body" and selectedItemSource.bodyId then
-			if containerHasSpace(snapshot and snapshot.backpack or nil) then
+			if containerHasSpace(snapshot and snapshot.backpack or nil, "backpack", selectedMenuItem) then
 				table.insert(menuActions, {
 					label = "Add to Backpack",
 					run = function()
@@ -1690,7 +2225,7 @@ local function HudApp()
 				})
 			end
 
-			if (selectedMenuItem.category == "mag" or selectedMenuItem.category == "med") and containerHasSpace(snapshot and snapshot.rig or nil) then
+			if (selectedMenuItem.category == "mag" or selectedMenuItem.category == "med") and containerHasSpace(snapshot and snapshot.rig or nil, "rig", selectedMenuItem) then
 				table.insert(menuActions, {
 					label = "Add to Rig",
 					run = function()
@@ -1711,7 +2246,7 @@ local function HudApp()
 			end
 		elseif isLobbyStashView then
 			if selectedItemSource.containerName == "stash" then
-				if containerHasSpace(snapshot and snapshot.backpack or nil) then
+				if containerHasSpace(snapshot and snapshot.backpack or nil, "backpack", selectedMenuItem) then
 					table.insert(menuActions, {
 						label = "Move to Inventory",
 						run = function()
@@ -1726,7 +2261,7 @@ local function HudApp()
 				end
 
 				if (selectedMenuItem.category == "mag" or selectedMenuItem.category == "med")
-					and containerHasSpace(snapshot and snapshot.rig or nil) then
+					and containerHasSpace(snapshot and snapshot.rig or nil, "rig", selectedMenuItem) then
 					table.insert(menuActions, {
 						label = "Move to Rig",
 						run = function()
@@ -1755,11 +2290,19 @@ local function HudApp()
 					})
 				end
 			else
-				if selectedItemSource.containerName ~= "backpack" and containerHasSpace(snapshot and snapshot.backpack or nil) then
+				if selectedItemSource.containerName ~= "backpack" and containerHasSpace(snapshot and snapshot.backpack or nil, "backpack", selectedMenuItem) then
 					table.insert(menuActions, {
 						label = "Move to Backpack",
 						run = function()
-							sendMoveItemRequest(selectedItemId, selectedItemSource.containerName, "backpack", nil)
+							if isLobbyStashView then
+								sendLobbyStashActionRequest({
+									kind = "MoveWithinInventory",
+									itemId = selectedItemId,
+									dest = "backpack",
+								})
+							else
+								sendMoveItemRequest(selectedItemId, selectedItemSource.containerName, "backpack", nil)
+							end
 							closeContextMenu()
 						end,
 					})
@@ -1767,11 +2310,19 @@ local function HudApp()
 
 				if (selectedMenuItem.category == "mag" or selectedMenuItem.category == "med")
 					and selectedItemSource.containerName ~= "rig"
-					and containerHasSpace(snapshot and snapshot.rig or nil) then
+					and containerHasSpace(snapshot and snapshot.rig or nil, "rig", selectedMenuItem) then
 					table.insert(menuActions, {
 						label = "Move to Rig",
 						run = function()
-							sendMoveItemRequest(selectedItemId, selectedItemSource.containerName, "rig", nil)
+							if isLobbyStashView then
+								sendLobbyStashActionRequest({
+									kind = "MoveWithinInventory",
+									itemId = selectedItemId,
+									dest = "rig",
+								})
+							else
+								sendMoveItemRequest(selectedItemId, selectedItemSource.containerName, "rig", nil)
+							end
 							closeContextMenu()
 						end,
 					})
@@ -1781,7 +2332,18 @@ local function HudApp()
 					table.insert(menuActions, {
 						label = "Move to Weapon Slot",
 						run = function()
-							sendMoveItemRequest(selectedItemId, selectedItemSource.containerName, "OpenWeaponSlot", nil)
+							if isLobbyStashView then
+								local destination = getOpenWeaponSlotDestination(selectedMenuItem)
+								if destination then
+									sendLobbyStashActionRequest({
+										kind = "MoveWithinInventory",
+										itemId = selectedItemId,
+										dest = destination,
+									})
+								end
+							else
+								sendMoveItemRequest(selectedItemId, selectedItemSource.containerName, "OpenWeaponSlot", nil)
+							end
 							closeContextMenu()
 						end,
 					})
@@ -1810,7 +2372,7 @@ local function HudApp()
 				})
 			end
 
-			if selectedItemSource.containerName ~= "backpack" and containerHasSpace(snapshot and snapshot.backpack or nil) then
+			if selectedItemSource.containerName ~= "backpack" and containerHasSpace(snapshot and snapshot.backpack or nil, "backpack", selectedMenuItem) then
 				table.insert(menuActions, {
 					label = "Move to Backpack",
 					run = function()
@@ -1822,7 +2384,7 @@ local function HudApp()
 
 			if (selectedMenuItem.category == "mag" or selectedMenuItem.category == "med")
 				and selectedItemSource.containerName ~= "rig"
-				and containerHasSpace(snapshot and snapshot.rig or nil) then
+				and containerHasSpace(snapshot and snapshot.rig or nil, "rig", selectedMenuItem) then
 				table.insert(menuActions, {
 					label = "Move to Rig",
 					run = function()
@@ -1885,48 +2447,6 @@ local function HudApp()
 	local contextMenuHeight = 16 + (#menuActions * (if isMobile then 38 else 32))
 
 	if not inventoryVisible and isRaidPlace then
-		local hotbarSlotSize = if isMobile then 46 else 56
-		local hotbarPadding = if isMobile then 6 else 8
-		local barChildren: {[string]: any} = {
-			Layout = React.createElement("UIListLayout", {
-				FillDirection = Enum.FillDirection.Horizontal,
-				HorizontalAlignment = Enum.HorizontalAlignment.Center,
-				Padding = UDim.new(0, hotbarPadding),
-			}),
-		}
-
-		for i = 1, 5 do
-			local actionName = if i == 1
-				then "equip_primary_a"
-				elseif i == 2
-				then "equip_primary_b"
-				elseif i == 3
-				then "equip_pistol"
-				elseif i == 4
-				then "equip_melee"
-				else nil
-			local hotbarItemId = hotbarItemIds[i]
-			barChildren["Slot" .. i] = hotbarSlot(
-				i,
-				itemLabel(snapshot, hotbarItemId),
-				equippedIndex == i,
-				isMobile,
-				function()
-					if actionName then
-						ClientActionBridge.invoke(actionName)
-						return
-					end
-
-					if hotbarItemId then
-						local itemAction = getItemActionLabel(snapshot, hotbarItemId)
-						if itemAction then
-							sendItemActionRequest(hotbarItemId, itemAction)
-						end
-					end
-				end
-			)
-		end
-
 		rootChildren.Health = React.createElement("TextLabel", {
 			AnchorPoint = Vector2.new(0, 1),
 			Position = UDim2.new(0, 16, 1, if isMobile then -12 else -16),
@@ -1974,16 +2494,6 @@ local function HudApp()
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextColor3 = Color3.fromRGB(255, 210, 120),
 		})
-
-
-
-		rootChildren.Hotbar = React.createElement("Frame", {
-			AnchorPoint = Vector2.new(0.5, 1),
-			Position = UDim2.new(0.5, 0, 1, if isMobile then -12 else -16),
-			Size = UDim2.fromOffset(5 * hotbarSlotSize + 4 * hotbarPadding, hotbarSlotSize),
-			BackgroundTransparency = 1,
-		}, barChildren)
-
 		if shouldShowRaidTimer then
 			local timerUrgent = raidTimerRemaining ~= nil and raidTimerRemaining <= 180
 			rootChildren.RaidTimerButton = React.createElement("TextButton", {
@@ -2171,8 +2681,8 @@ local function HudApp()
 
 		local inventoryPanel = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = if isMobile then UDim2.fromScale(0.56, 0.5) else UDim2.fromScale(0.53, 0.5),
-			Size = UDim2.fromScale(0.65, 0.85),
+			Position = if isMobile then UDim2.fromScale(0.56, 0.5) else UDim2.fromScale(0.54, 0.5),
+			Size = if isMobile then UDim2.fromScale(0.65, 0.85) else UDim2.fromScale(0.78, 0.90),
 			BackgroundTransparency = 0.12,
 			BackgroundColor3 = Color3.fromRGB(12, 12, 12),
 			BorderSizePixel = 0,
@@ -2304,10 +2814,16 @@ local function HudApp()
 			) else nil,
 			Weapons = if (not isMobile) or (isMobile and not isLobbyStashView and currentMobilePageId == "weapons") then weaponSlotCard(
 				snapshot,
-				if isMobile then UDim2.new(0, 16, 0, 84) else UDim2.new(0, 16, 0, 44),
+				if isMobile
+					then UDim2.new(0, 16, 0, 84)
+					else UDim2.new(0, 16, 0, 44),
 				if isMobile
 					then UDim2.new(1, -32, 1, -128)
-					else UDim2.new(if bodyLootSnapshot or isLobbyStashView then 0.58 else 0.47, -24, 0.30, -8),
+					else (if isLobbyStashView
+						then UDim2.new(0.58, -24, 0, 194)
+						elseif bodyLootSnapshot
+						then UDim2.new(0.58, -24, 0, 194)
+						else UDim2.new(1, -32, 0, 194)),
 				selectedItemId,
 				openContextMenuForItem,
 				isMobile
@@ -2318,18 +2834,30 @@ local function HudApp()
 				snapshot,
 				if isMobile
 					then UDim2.new(0, 16, 0, 84)
-					else UDim2.new(if bodyLootSnapshot then 0 else 0, if bodyLootSnapshot then 16 else 16, if bodyLootSnapshot then 0.30 else 0.32, if bodyLootSnapshot then 52 else 44),
+					else (if isLobbyStashView
+						then UDim2.new(0, 16, 0, 252)
+						elseif bodyLootSnapshot
+						then UDim2.new(0, 16, 0, 252)
+						else UDim2.new(0, 16, 0, 252)),
 				if isMobile
 					then UDim2.new(1, -32, 1, -128)
-					else UDim2.new(if bodyLootSnapshot or isLobbyStashView then 0.58 else 0.5, -24, if bodyLootSnapshot then 0.28 else 0.24, if bodyLootSnapshot then -8 else -8),
+					else (if isLobbyStashView
+						then UDim2.new(0.58, -24, 0, 210)
+						elseif bodyLootSnapshot
+						then UDim2.new(0.58, -24, 0.30, -12)
+						else UDim2.new(0.48, -24, 1, -312)),
 				dragState,
 				hoverState,
 				selectedItemId,
 				setHoverState,
 				setDragState,
 				openContextMenuForItem,
+				moveDraggedItemToCell,
+				activateGridItem,
+				activeDragItem,
 				isMobile,
-				not isMobile
+				not isMobile,
+				"grid"
 			) else nil,
 			Backpack = if not isMobile or (not isLobbyStashView and currentMobilePageId == "backpack") then containerCard(
 				"Backpack",
@@ -2337,33 +2865,49 @@ local function HudApp()
 				snapshot,
 				if isMobile
 					then UDim2.new(0, 16, 0, 84)
-					else UDim2.new(0, 16, if bodyLootSnapshot then 0.58 else 0.58, 52),
+					else (if isLobbyStashView
+						then UDim2.new(0, 16, 0, 478)
+						elseif bodyLootSnapshot
+						then UDim2.new(0, 16, 0.58, 44)
+						else UDim2.new(0.52, 8, 0, 252)),
 				if isMobile
 					then UDim2.new(1, -32, 1, -128)
-					else UDim2.new(if bodyLootSnapshot or isLobbyStashView then 0.58 else 0.47, -24, if bodyLootSnapshot then 0.36 else 0.34, if bodyLootSnapshot then -80 else -84),
+					else (if isLobbyStashView
+						then UDim2.new(0.58, -24, 1, -532)
+						elseif bodyLootSnapshot
+						then UDim2.new(0.58, -24, 0.36, -80)
+						else UDim2.new(0.48, -24, 1, -312)),
 				dragState,
 				hoverState,
 				selectedItemId,
 				setHoverState,
 				setDragState,
 				openContextMenuForItem,
+				moveDraggedItemToCell,
+				activateGridItem,
+				activeDragItem,
 				isMobile,
-				not isMobile
+				not isMobile,
+				"grid"
 			) else nil,
 			Stash = if isLobbyStashView and (not isMobile or currentMobilePageId == "stash") then containerCard(
 				"Stash",
 				"stash",
 				snapshot,
 				if isMobile then UDim2.new(0, 16, 0, 84) else UDim2.new(0.62, 8, 0, 44),
-				if isMobile then UDim2.new(1, -32, 1, -128) else UDim2.new(0.38, -24, 0.88, -72),
+				if isMobile then UDim2.new(1, -32, 1, -128) else UDim2.new(0.38, -24, 1, -92),
 				dragState,
 				hoverState,
 				selectedItemId,
 				setHoverState,
 				setDragState,
 				openContextMenuForItem,
+				moveDraggedItemToCell,
+				activateGridItem,
+				activeDragItem,
 				isMobile,
-				not isMobile
+				not isMobile,
+				"grid"
 			) else nil,
 			BodyLoot = if bodyLootSnapshot and (not isMobile or currentMobilePageId == "body") then bodyContainerCard(
 				bodyLootSnapshot,
@@ -2585,6 +3129,8 @@ local function HudApp()
 	end
 
 	if shouldRenderLoadingOverlay or isLeavingRaid then
+		local overlayTitle = loadingOverlayText
+		local overlayDetail = loadingOverlayDetailText
 		rootChildren.LoadingOverlay = React.createElement("Frame", {
 			Position = UDim2.fromOffset(0, 0),
 			Size = UDim2.fromScale(1, 1),
@@ -2593,29 +3139,29 @@ local function HudApp()
 			BorderSizePixel = 0,
 			ZIndex = 50,
 		}, {
-			Label = React.createElement("TextLabel", {
+			Label = if not isLeavingRaid then React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, if isMobile then 0.24 else 0.52),
 				Size = UDim2.fromOffset(if isMobile then math.min(320, viewportSize.X - 36) else 560, if isMobile then 26 else 34),
 				BackgroundTransparency = 1,
-				Text = loadingOverlayText,
+				Text = overlayTitle,
 				Font = Enum.Font.GothamBold,
 				TextSize = if isMobile then 17 else 22,
 				TextColor3 = Color3.fromRGB(235, 235, 235),
 				ZIndex = 51,
-			}),
-			Detail = React.createElement("TextLabel", {
+			}) else nil,
+			Detail = if not isLeavingRaid then React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, if isMobile then 0.31 else 0.56),
 				Size = UDim2.fromOffset(if isMobile then math.min(340, viewportSize.X - 30) else 700, if isMobile then 42 else 28),
 				BackgroundTransparency = 1,
-				Text = loadingOverlayDetailText,
+				Text = overlayDetail,
 				Font = Enum.Font.Gotham,
 				TextSize = if isMobile then 13 else 15,
 				TextWrapped = isMobile,
 				TextColor3 = Color3.fromRGB(180, 180, 180),
 				ZIndex = 51,
-			}),
+			}) else nil,
 			Spinner = if not isLeavingRaid then React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, if isMobile then 0.40 else 0.62),
@@ -2649,147 +3195,6 @@ local function HudApp()
 				Step8 = loadingStepLabel(loadingChecklist[8], 8, loadingActiveMarkerVisible, isMobile),
 			}) else nil,
 		})
-	end
-
-	if isRaidPlace then
-		rootChildren.DebugLogToggle = React.createElement("TextButton", {
-			AnchorPoint = Vector2.new(0, 0),
-			Position = UDim2.new(0, 16, 0, if isMobile then 56 else 16),
-			Size = UDim2.fromOffset(if isMobile then 76 else 92, 34),
-			BackgroundColor3 = Color3.fromRGB(18, 18, 18),
-			BackgroundTransparency = 0.12,
-			BorderSizePixel = 0,
-			Text = string.format("Logs (%d)", #purchaseTrapLogs),
-			Font = Enum.Font.GothamBold,
-			TextSize = if isMobile then 12 else 13,
-			TextColor3 = Color3.fromRGB(255, 225, 130),
-			ZIndex = 60,
-			[React.Event.Activated] = function()
-				setDebugLogOpen(function(previous)
-					return not previous
-				end)
-			end,
-		}, {
-			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
-			Stroke = React.createElement("UIStroke", {
-				Thickness = 1,
-				Transparency = 0.08,
-				Color = Color3.fromRGB(255, 150, 120),
-			}),
-		})
-
-		if debugLogOpen then
-			local logChildren: {[string]: any} = {
-				Layout = React.createElement("UIListLayout", {
-					FillDirection = Enum.FillDirection.Vertical,
-					Padding = UDim.new(0, 6),
-					SortOrder = Enum.SortOrder.LayoutOrder,
-				}),
-			}
-
-			if #purchaseTrapLogs == 0 then
-				logChildren.Empty = React.createElement("TextLabel", {
-					LayoutOrder = 1,
-					Size = UDim2.new(1, 0, 0, 20),
-					BackgroundTransparency = 1,
-					Text = "No purchase prompts logged yet.",
-					Font = Enum.Font.Code,
-					TextSize = if isMobile then 12 else 13,
-					TextColor3 = Color3.fromRGB(180, 180, 180),
-					TextXAlignment = Enum.TextXAlignment.Left,
-					TextWrapped = true,
-				})
-			else
-				for index, entry in ipairs(purchaseTrapLogs) do
-					local timestamp = if typeof(entry.timestamp) == "number"
-						then string.format("%.2f", entry.timestamp)
-						else "?"
-					local message = if typeof(entry.message) == "string"
-						then entry.message
-						else "unknown"
-					logChildren["Log" .. index] = React.createElement("TextLabel", {
-						LayoutOrder = index,
-						Size = UDim2.new(1, 0, 0, if isMobile then 44 else 38),
-						BackgroundColor3 = Color3.fromRGB(26, 26, 26),
-						BackgroundTransparency = 0.18,
-						BorderSizePixel = 0,
-						Text = string.format("[%s] %s", timestamp, message),
-						Font = Enum.Font.Code,
-						TextSize = if isMobile then 11 else 12,
-						TextWrapped = true,
-						TextColor3 = Color3.new(1, 1, 1),
-						TextXAlignment = Enum.TextXAlignment.Left,
-						TextYAlignment = Enum.TextYAlignment.Top,
-					}, {
-						Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
-						Padding = React.createElement("UIPadding", {
-							PaddingLeft = UDim.new(0, 8),
-							PaddingRight = UDim.new(0, 8),
-							PaddingTop = UDim.new(0, 6),
-							PaddingBottom = UDim.new(0, 6),
-						}),
-					})
-				end
-			end
-
-			rootChildren.DebugLogPanel = React.createElement("Frame", {
-				AnchorPoint = Vector2.new(0, 0),
-				Position = UDim2.new(0, 16, 0, if isMobile then 96 else 56),
-				Size = UDim2.fromOffset(if isMobile then 340 else 420, if isMobile then 240 else 280),
-				BackgroundColor3 = Color3.fromRGB(14, 14, 14),
-				BackgroundTransparency = 0.06,
-				BorderSizePixel = 0,
-				ZIndex = 60,
-			}, {
-				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
-				Stroke = React.createElement("UIStroke", {
-					Thickness = 1,
-					Transparency = 0.08,
-					Color = Color3.fromRGB(255, 150, 120),
-				}),
-				Title = React.createElement("TextLabel", {
-					Position = UDim2.fromOffset(12, 10),
-					Size = UDim2.new(1, -56, 0, 20),
-					BackgroundTransparency = 1,
-					Text = "Purchase Trap Log",
-					Font = Enum.Font.GothamBold,
-					TextSize = if isMobile then 14 else 15,
-					TextColor3 = Color3.fromRGB(255, 225, 130),
-					TextXAlignment = Enum.TextXAlignment.Left,
-					ZIndex = 61,
-				}),
-				Close = React.createElement("TextButton", {
-					AnchorPoint = Vector2.new(1, 0),
-					Position = UDim2.new(1, -10, 0, 8),
-					Size = UDim2.fromOffset(28, 28),
-					BackgroundColor3 = Color3.fromRGB(28, 28, 28),
-					BackgroundTransparency = 0.08,
-					BorderSizePixel = 0,
-					Text = "X",
-					Font = Enum.Font.GothamBold,
-					TextSize = 14,
-					TextColor3 = Color3.fromRGB(255, 225, 130),
-					ZIndex = 61,
-					[React.Event.Activated] = function()
-						setDebugLogOpen(false)
-					end,
-				}, {
-					Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
-				}),
-				List = React.createElement("ScrollingFrame", {
-					Position = UDim2.fromOffset(12, 38),
-					Size = UDim2.new(1, -24, 1, -50),
-					BackgroundTransparency = 1,
-					BorderSizePixel = 0,
-					CanvasSize = UDim2.fromOffset(0, 0),
-					AutomaticCanvasSize = Enum.AutomaticSize.Y,
-					ScrollingDirection = Enum.ScrollingDirection.Y,
-					ScrollBarThickness = if isMobile then 4 else 6,
-					ScrollBarImageColor3 = Color3.fromRGB(120, 120, 120),
-					ZIndex = 61,
-				}, logChildren),
-			})
-		end
 	end
 
 	return React.createElement("ScreenGui", {

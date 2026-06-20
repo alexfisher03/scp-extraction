@@ -1,6 +1,7 @@
 --!strict
 
 local ItemInstance = require(script.Parent.ItemInstance)
+local InventoryGrid = require(script.Parent.InventoryGrid)
 local PlayerProfile = require(script.Parent.PlayerProfile)
 
 local ProfileInventory = {}
@@ -111,13 +112,13 @@ function ProfileInventory.toInventorySnapshot(profile: any): any
 	copyItemIntoSnapshot(itemsById, normalized.items, normalized.loadout.primaryB)
 	copyItemIntoSnapshot(itemsById, normalized.items, normalized.loadout.pistol)
 	copyItemIntoSnapshot(itemsById, normalized.items, normalized.loadout.melee)
-	for _, itemId in ipairs(normalized.loadout.rig) do
+	for _, itemId in pairs(normalized.loadout.rig) do
 		copyItemIntoSnapshot(itemsById, normalized.items, itemId)
 	end
-	for _, itemId in ipairs(normalized.loadout.backpack) do
+	for _, itemId in pairs(normalized.loadout.backpack) do
 		copyItemIntoSnapshot(itemsById, normalized.items, itemId)
 	end
-	for _, itemId in ipairs(normalized.stash) do
+	for _, itemId in pairs(normalized.stash) do
 		copyItemIntoSnapshot(itemsById, normalized.items, itemId)
 	end
 
@@ -147,13 +148,6 @@ function ProfileInventory.toInventorySnapshot(profile: any): any
 		backpack = makeSnapshotContainer(normalized.backpackCapacity, normalized.loadout.backpack),
 		stash = makeSnapshotContainer(normalized.stashCapacity, normalized.stash),
 		quickBinds = {},
-		hotbarItemIds = {
-			normalized.loadout.primaryA,
-			normalized.loadout.primaryB,
-			normalized.loadout.pistol,
-			normalized.loadout.melee,
-			nil,
-		},
 		itemsById = itemsById,
 		isReloading = false,
 		lastCheckMag = nil,
@@ -195,7 +189,13 @@ function ProfileInventory.applyInventorySnapshot(profile: any, snapshot: any): a
 	end
 
 	for itemId in pairs(previousCarriedItemIds) do
-		local isInStash = table.find(normalized.stash, itemId) ~= nil
+		local isInStash = false
+		for slotIndex = 1, normalized.stashCapacity do
+			if normalized.stash[slotIndex] == itemId then
+				isInStash = true
+				break
+			end
+		end
 		if not isInStash then
 			normalized.items[itemId] = nil
 		end
@@ -227,7 +227,7 @@ function ProfileInventory.applyInventorySnapshot(profile: any, snapshot: any): a
 	normalized.loadout.pistol = if typeof(weaponSlots.Pistol) == "string" and carriedItemIds[weaponSlots.Pistol] then weaponSlots.Pistol else nil
 	normalized.loadout.melee = if typeof(weaponSlots.Melee) == "string" and carriedItemIds[weaponSlots.Melee] then weaponSlots.Melee else nil
 
-	local function restoreContainer(containerSnapshot: any, capacity: number, allowedItemIds: {[string]: boolean}?): {string}
+	local function restoreContainer(containerSnapshot: any, capacity: number, containerName: string, allowedItemIds: {[string]: boolean}?): {string}
 		local out = {}
 		if typeof(containerSnapshot) ~= "table" then
 			return out
@@ -236,18 +236,23 @@ function ProfileInventory.applyInventorySnapshot(profile: any, snapshot: any): a
 		for slotIndex = 1, math.min(capacity, if typeof(containerSnapshot.capacity) == "number" then containerSnapshot.capacity else capacity) do
 			local itemId = containerSnapshot.itemIds and containerSnapshot.itemIds[slotIndex] or nil
 			if typeof(itemId) == "string" and itemId ~= "" and (allowedItemIds == nil or allowedItemIds[itemId]) then
-				table.insert(out, itemId)
+				local item = snapshotItemsById[itemId] or normalized.items[itemId]
+				local destination = InventoryGrid.placeItem(out, snapshotItemsById, capacity, containerName, item, slotIndex, nil)
+					or InventoryGrid.placeItem(out, snapshotItemsById, capacity, containerName, item, nil, nil)
+				if destination then
+					out[destination] = itemId
+				end
 			end
 		end
 
 		return out
 	end
 
-	normalized.loadout.rig = restoreContainer(snapshot.rig, normalized.rigCapacity, carriedItemIds)
-	normalized.loadout.backpack = restoreContainer(snapshot.backpack, normalized.backpackCapacity, carriedItemIds)
+	normalized.loadout.rig = restoreContainer(snapshot.rig, normalized.rigCapacity, "rig", carriedItemIds)
+	normalized.loadout.backpack = restoreContainer(snapshot.backpack, normalized.backpackCapacity, "backpack", carriedItemIds)
 	normalized.loadout.secure = {}
 	if typeof(snapshot.stash) == "table" then
-		normalized.stash = restoreContainer(snapshot.stash, normalized.stashCapacity, stashItemIds)
+		normalized.stash = restoreContainer(snapshot.stash, normalized.stashCapacity, "stash", stashItemIds)
 	end
 	return normalized
 end

@@ -108,23 +108,61 @@ local function handlePostRaidArrival(player: Player)
 	local teleportData = joinData.TeleportData
 	local raidResult = if typeof(teleportData) == "table" then teleportData.raidResult else nil
 	if typeof(raidResult) ~= "table" or not RaidResult.isValidStatus(raidResult.status) then
-		setPostRaidAttributes(player, nil)
+		local abandonedRaid = ProfileService.consumeAbandonedRaid(player.UserId)
+		if abandonedRaid then
+			raidResult = {
+				status = RaidResult.Status.KIA,
+				xpEarned = 0,
+				kills = 0,
+				eliminations = {},
+				raidEndedAt = Workspace:GetServerTimeNow(),
+				reason = "Disconnected in raid",
+			}
+			LobbySessionService.setPostRaidResult(player.UserId, raidResult)
+			print(string.format(
+				"[PostRaidService] abandoned raid resolved userId=%d raidId=%s",
+				player.UserId,
+				tostring(abandonedRaid.raidId)
+			))
+			print(string.format("LOBBY_POST player=%s status=%s", player.Name, tostring(raidResult.status)))
+			setPostRaidAttributes(player, raidResult)
+		else
+			setPostRaidAttributes(player, nil)
+		end
 		local existingSnapshot = ProfileService.getInventorySnapshot(player.UserId)
 		snapshotEvent:FireClient(player, existingSnapshot)
+		if abandonedRaid then
+			if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+				movePlayerToStashSpawn(player)
+			else
+				local connection: RBXScriptConnection? = nil
+				connection = player.CharacterAdded:Connect(function()
+					if connection then
+						connection:Disconnect()
+						connection = nil
+					end
+					if player:GetAttribute("LobbyPostRaidOpen") then
+						movePlayerToStashSpawn(player)
+					end
+				end)
+			end
+		end
 		return
 	end
 
 	local appliedSnapshot = nil
 	if raidResult.status == RaidResult.Status.EXTRACTED then
 		ProfileService.applyExtractedSnapshot(player.UserId, raidResult.inventorySnapshot)
+		ProfileService.clearActiveRaid(player.UserId)
 		ProfileService.forceSave(player.UserId, "raid_return_extracted")
 		appliedSnapshot = ProfileService.getInventorySnapshot(player.UserId)
 	else
 		local preRaidProfileSnapshot = raidResult.preRaidProfileSnapshot
 		if preRaidProfileSnapshot ~= nil then
 			ProfileService.restoreProfileSnapshot(player.UserId, preRaidProfileSnapshot)
-			ProfileService.forceSave(player.UserId, "raid_return_restore")
 		end
+		ProfileService.clearActiveRaid(player.UserId)
+		ProfileService.forceSave(player.UserId, "raid_return_restore")
 		appliedSnapshot = ProfileService.getInventorySnapshot(player.UserId)
 	end
 

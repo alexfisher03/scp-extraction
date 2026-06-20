@@ -188,12 +188,69 @@ local function formatWait(secondsValue: number?): string
 	return string.format("%02d:%02d", math.floor(seconds / 60), seconds % 60)
 end
 
+local function getLobbyInteractablesFolder(): Instance?
+	local maps = workspace:FindFirstChild("Maps")
+	local mappedLobby = maps and maps:FindFirstChild("Lobby")
+	local mappedInteractables = mappedLobby and mappedLobby:FindFirstChild("Interactables")
+	if mappedInteractables then
+		return mappedInteractables
+	end
+
+	local legacyLobby = workspace:FindFirstChild("Lobby")
+	return legacyLobby and legacyLobby:FindFirstChild("Interactables")
+end
+
+local function getTerminalModel(terminalName: string): Model?
+	local interactables = getLobbyInteractablesFolder()
+	local terminal = interactables and interactables:FindFirstChild(terminalName)
+	if terminal and terminal:IsA("Model") then
+		return terminal
+	end
+	return nil
+end
+
+local function getTerminalPrompt(terminalName: string): ProximityPrompt?
+	local terminal = getTerminalModel(terminalName)
+	if not terminal then
+		return nil
+	end
+
+	for _, descendant in ipairs(terminal:GetDescendants()) do
+		if descendant:IsA("ProximityPrompt") then
+			return descendant
+		end
+	end
+
+	return nil
+end
+
+local function getTerminalPromptPart(terminalName: string): BasePart?
+	local terminal = getTerminalModel(terminalName)
+	if not terminal then
+		return nil
+	end
+
+	local promptPart = terminal:FindFirstChild("PromptPart")
+	if promptPart and promptPart:IsA("BasePart") then
+		return promptPart
+	end
+
+	if terminal.PrimaryPart then
+		return terminal.PrimaryPart
+	end
+
+	for _, descendant in ipairs(terminal:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			return descendant
+		end
+	end
+
+	return nil
+end
+
 local function getDeployTerminalPrompt(): ProximityPrompt?
-	local lobby = workspace:FindFirstChild("Lobby")
-	local interactables = lobby and lobby:FindFirstChild("Interactables")
-	local deployTerminal = interactables and interactables:FindFirstChild("DeployTerminal")
-	local prompt = deployTerminal and deployTerminal:FindFirstChild("ProximityPrompt")
-	if prompt and prompt:IsA("ProximityPrompt") then
+	local prompt = getTerminalPrompt("DeployTerminal")
+	if prompt then
 		print("[LobbyClient] Found deploy terminal prompt at startup")
 		return prompt
 	end
@@ -203,63 +260,23 @@ local function getDeployTerminalPrompt(): ProximityPrompt?
 end
 
 local function getDeployTerminalPromptPart(): BasePart?
-	local lobby = workspace:FindFirstChild("Lobby")
-	local interactables = lobby and lobby:FindFirstChild("Interactables")
-	local deployTerminal = interactables and interactables:FindFirstChild("DeployTerminal")
-	local promptPart = deployTerminal and deployTerminal:FindFirstChild("PromptPart")
-	if promptPart and promptPart:IsA("BasePart") then
-		return promptPart
-	end
-
-	return nil
+	return getTerminalPromptPart("DeployTerminal")
 end
 
 local function getStashTerminalPrompt(): ProximityPrompt?
-	local lobby = workspace:FindFirstChild("Lobby")
-	local interactables = lobby and lobby:FindFirstChild("Interactables")
-	local stashTerminal = interactables and interactables:FindFirstChild("StashTerminal")
-	local prompt = stashTerminal and stashTerminal:FindFirstChild("ProximityPrompt")
-	if prompt and prompt:IsA("ProximityPrompt") then
-		return prompt
-	end
-
-	return nil
+	return getTerminalPrompt("StashTerminal")
 end
 
 local function getStashTerminalPromptPart(): BasePart?
-	local lobby = workspace:FindFirstChild("Lobby")
-	local interactables = lobby and lobby:FindFirstChild("Interactables")
-	local stashTerminal = interactables and interactables:FindFirstChild("StashTerminal")
-	local promptPart = stashTerminal and stashTerminal:FindFirstChild("PromptPart")
-	if promptPart and promptPart:IsA("BasePart") then
-		return promptPart
-	end
-
-	return nil
+	return getTerminalPromptPart("StashTerminal")
 end
 
 local function getKioskPrompt(): ProximityPrompt?
-	local lobby = workspace:FindFirstChild("Lobby")
-	local interactables = lobby and lobby:FindFirstChild("Interactables")
-	local kiosk = interactables and interactables:FindFirstChild(QUARTERMASTER_KIOSK_NAME)
-	local prompt = kiosk and kiosk:FindFirstChild("ProximityPrompt")
-	if prompt and prompt:IsA("ProximityPrompt") then
-		return prompt
-	end
-
-	return nil
+	return getTerminalPrompt(QUARTERMASTER_KIOSK_NAME)
 end
 
 local function getKioskPromptPart(): BasePart?
-	local lobby = workspace:FindFirstChild("Lobby")
-	local interactables = lobby and lobby:FindFirstChild("Interactables")
-	local kiosk = interactables and interactables:FindFirstChild(QUARTERMASTER_KIOSK_NAME)
-	local promptPart = kiosk and kiosk:FindFirstChild("PromptPart")
-	if promptPart and promptPart:IsA("BasePart") then
-		return promptPart
-	end
-
-	return nil
+	return getTerminalPromptPart(QUARTERMASTER_KIOSK_NAME)
 end
 
 local function getPromptPartDistance(promptPart: BasePart?): number?
@@ -873,7 +890,7 @@ local function LobbyApp()
 				BackgroundColor3 = Color3.fromRGB(18, 18, 18),
 				BackgroundTransparency = 0.12,
 				BorderSizePixel = 0,
-				Text = "Deploy Terminal. Press E",
+				Text = "Deploy Into Raid. Press E",
 				Font = Enum.Font.GothamBold,
 				TextSize = 20,
 				TextColor3 = Color3.new(1, 1, 1),
@@ -948,7 +965,7 @@ local function LobbyApp()
 				BackgroundColor3 = Color3.fromRGB(18, 18, 18),
 				BackgroundTransparency = 0.1,
 				BorderSizePixel = 0,
-				Text = "Open Deploy Terminal",
+				Text = "Deploy Into Raid",
 				Font = Enum.Font.GothamBold,
 				TextSize = 18,
 				TextColor3 = Color3.fromRGB(255, 225, 130),
@@ -1145,12 +1162,12 @@ local function LobbyApp()
 			return React.createElement("TextButton", {
 				LayoutOrder = if value == "all" then 1 elseif value == "rig" then 2 else 3,
 				Size = UDim2.fromOffset(width, if isMobile then 38 else 34),
-				BackgroundColor3 = if selected then Color3.fromRGB(84, 64, 28) else Color3.fromRGB(26, 26, 26),
+				BackgroundColor3 = if selected then Color3.fromRGB(86, 76, 34) else Color3.fromRGB(22, 24, 28),
 				BorderSizePixel = 0,
-				Text = label,
-				Font = Enum.Font.GothamBold,
-				TextSize = if isMobile then 15 else 13,
-				TextColor3 = if selected then Color3.fromRGB(255, 240, 170) else Color3.fromRGB(225, 225, 225),
+				Text = string.upper(label),
+				Font = Enum.Font.Code,
+				TextSize = if isMobile then 14 else 12,
+				TextColor3 = if selected then Color3.fromRGB(255, 240, 170) else Color3.fromRGB(205, 205, 205),
 				[React.Event.Activated] = function()
 					setQuartermasterTab(value)
 				end,
@@ -1164,10 +1181,23 @@ local function LobbyApp()
 			})
 		end
 
-		local listChildren: {[string]: any} = {
+		local useQuartermasterGrid = not isMobile and #filteredQuartermasterItems > 0
+		local listChildren: {[string]: any} = if useQuartermasterGrid then {
+			Padding = React.createElement("UIPadding", {
+				PaddingRight = UDim.new(0, 4),
+				PaddingBottom = UDim.new(0, 4),
+			}),
+			Layout = React.createElement("UIGridLayout", {
+				CellPadding = UDim2.fromOffset(12, 12),
+				CellSize = UDim2.new(0.5, -8, 0, 170),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				HorizontalAlignment = Enum.HorizontalAlignment.Left,
+				VerticalAlignment = Enum.VerticalAlignment.Top,
+			}),
+		} else {
 			Layout = React.createElement("UIListLayout", {
 				FillDirection = Enum.FillDirection.Vertical,
-				Padding = UDim.new(0, if isMobile then 10 else 8),
+				Padding = UDim.new(0, 10),
 				SortOrder = Enum.SortOrder.LayoutOrder,
 			}),
 		}
@@ -1175,8 +1205,8 @@ local function LobbyApp()
 		if #filteredQuartermasterItems == 0 then
 			listChildren.Empty = React.createElement("Frame", {
 				LayoutOrder = 1,
-				Size = UDim2.new(1, 0, 0, if isMobile then 124 else 118),
-				BackgroundColor3 = Color3.fromRGB(20, 22, 26),
+				Size = UDim2.new(1, if useQuartermasterGrid then -6 else 0, 0, if isMobile then 124 else 170),
+				BackgroundColor3 = Color3.fromRGB(16, 18, 22),
 				BackgroundTransparency = 0.02,
 				BorderSizePixel = 0,
 			}, {
@@ -1190,9 +1220,9 @@ local function LobbyApp()
 					Position = UDim2.fromOffset(16, 16),
 					Size = UDim2.new(1, -32, 0, 24),
 					BackgroundTransparency = 1,
-					Text = "No sellable items",
-					Font = Enum.Font.GothamBold,
-					TextSize = if isMobile then 19 else 18,
+					Text = "Nothing available for requisition sale",
+					Font = Enum.Font.Code,
+					TextSize = if isMobile then 16 else 15,
 					TextColor3 = Color3.fromRGB(255, 240, 170),
 					TextXAlignment = Enum.TextXAlignment.Left,
 				}),
@@ -1200,9 +1230,9 @@ local function LobbyApp()
 					Position = UDim2.fromOffset(16, 48),
 					Size = UDim2.new(1, -32, 0, 56),
 					BackgroundTransparency = 1,
-					Text = "Bring loot back in your rig or backpack to sell it here for REQ credits.",
+					Text = "Bring recovered items back in your rig or backpack. The Quartermaster only accepts field-carried gear.",
 					Font = Enum.Font.Gotham,
-					TextSize = if isMobile then 15 else 14,
+					TextSize = if isMobile then 14 else 13,
 					TextWrapped = true,
 					TextColor3 = Color3.fromRGB(205, 205, 205),
 					TextXAlignment = Enum.TextXAlignment.Left,
@@ -1212,116 +1242,234 @@ local function LobbyApp()
 		else
 			for index, row in ipairs(filteredQuartermasterItems) do
 				local isPending = quartermasterPendingItemId == row.itemId
-				listChildren["Item" .. index] = React.createElement("TextButton", {
-					LayoutOrder = index,
-					Size = UDim2.new(1, 0, 0, if isMobile then 108 else 94),
-					BackgroundColor3 = if selectedQuartermasterItem and selectedQuartermasterItem.itemId == row.itemId then Color3.fromRGB(34, 30, 18) else Color3.fromRGB(18, 20, 24),
-					BackgroundTransparency = 0.02,
-					BorderSizePixel = 0,
-					Text = "",
-					AutoButtonColor = not isPending,
-					[React.Event.Activated] = function()
-						if isPending then
-							return
-						end
-						setQuartermasterSelectedItemId(row.itemId)
-						if isMobile then
-							setQuartermasterConfirmItemId(row.itemId)
-						end
-					end,
-				}, {
-					Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
-					Stroke = React.createElement("UIStroke", {
-						Thickness = if selectedQuartermasterItem and selectedQuartermasterItem.itemId == row.itemId then 1.5 else 1,
-						Transparency = if selectedQuartermasterItem and selectedQuartermasterItem.itemId == row.itemId then 0.05 else 0.2,
-						Color = Color3.fromRGB(255, 225, 130),
-					}),
-					SourcePill = React.createElement("Frame", {
-						Position = UDim2.fromOffset(14, 14),
-						Size = UDim2.fromOffset(if isMobile then 78 else 70, 24),
-						BackgroundColor3 = sourceColor(row.source),
-						BackgroundTransparency = 0.15,
+				local isSelected = selectedQuartermasterItem and selectedQuartermasterItem.itemId == row.itemId
+				if isMobile then
+					listChildren["Item" .. index] = React.createElement("TextButton", {
+						LayoutOrder = index,
+						Size = UDim2.new(1, 0, 0, 112),
+						BackgroundColor3 = if isSelected then Color3.fromRGB(30, 30, 18) else Color3.fromRGB(16, 18, 22),
+						BackgroundTransparency = 0.02,
 						BorderSizePixel = 0,
-					}, {
-						Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
-						Label = React.createElement("TextLabel", {
-							Size = UDim2.fromScale(1, 1),
-							BackgroundTransparency = 1,
-							Text = sourceLabel(row.source),
-							Font = Enum.Font.GothamBold,
-							TextSize = if isMobile then 12 else 11,
-							TextColor3 = Color3.fromRGB(18, 18, 18),
-						}),
-					}),
-					ValuePill = React.createElement("Frame", {
-						AnchorPoint = Vector2.new(1, 0),
-						Position = UDim2.new(1, -14, 0, 14),
-						Size = UDim2.fromOffset(if isMobile then 104 else 96, 28),
-						BackgroundColor3 = Color3.fromRGB(20, 42, 24),
-						BackgroundTransparency = 0.05,
-						BorderSizePixel = 0,
-					}, {
-						Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
-						Label = React.createElement("TextLabel", {
-							Size = UDim2.fromScale(1, 1),
-							BackgroundTransparency = 1,
-							Text = string.format("+%d REQ", row.value),
-							Font = Enum.Font.GothamBold,
-							TextSize = if isMobile then 14 else 13,
-							TextColor3 = Color3.fromRGB(120, 255, 140),
-						}),
-					}),
-					Name = React.createElement("TextLabel", {
-						Position = UDim2.fromOffset(14, 44),
-						Size = UDim2.new(1, -28, 0, if isMobile then 22 else 20),
-						BackgroundTransparency = 1,
-						Text = row.displayName,
-						Font = Enum.Font.GothamBold,
-						TextSize = if isMobile then 20 else 17,
-						TextColor3 = Color3.new(1, 1, 1),
-						TextXAlignment = Enum.TextXAlignment.Left,
-					}),
-					Meta = React.createElement("TextLabel", {
-						Position = UDim2.fromOffset(14, 69),
-						Size = UDim2.new(1, if isMobile then -28 else -124, 0, 16),
-						BackgroundTransparency = 1,
-						Text = string.format("%s  |  %s", row.category, row.origin or "BroughtIn"),
-						Font = Enum.Font.Code,
-						TextSize = if isMobile then 13 else 12,
-						TextColor3 = Color3.fromRGB(210, 210, 210),
-						TextXAlignment = Enum.TextXAlignment.Left,
-					}),
-					Hint = React.createElement("TextLabel", {
-						AnchorPoint = Vector2.new(0, 1),
-						Position = UDim2.new(0, 14, 1, -10),
-						Size = UDim2.new(1, if isMobile then -28 else -124, 0, 14),
-						BackgroundTransparency = 1,
-						Text = if isMobile then "Tap to review sale" else "Select for preview or sell instantly",
-						Font = Enum.Font.Gotham,
-						TextSize = if isMobile then 12 else 11,
-						TextColor3 = Color3.fromRGB(165, 165, 165),
-						TextXAlignment = Enum.TextXAlignment.Left,
-					}),
-					Sell = if not isMobile then React.createElement("TextButton", {
-						AnchorPoint = Vector2.new(1, 1),
-						Position = UDim2.new(1, -12, 1, -10),
-						Size = UDim2.fromOffset(92, 36),
-						BackgroundColor3 = if isPending then Color3.fromRGB(52, 52, 52) else Color3.fromRGB(84, 64, 28),
-						BorderSizePixel = 0,
-						Text = if isPending then "Selling..." else "Sell",
-						Font = Enum.Font.GothamBold,
-						TextSize = 14,
-						TextColor3 = Color3.new(1, 1, 1),
+						Text = "",
 						AutoButtonColor = not isPending,
-						Active = not isPending,
 						[React.Event.Activated] = function()
+							if isPending then
+								return
+							end
 							setQuartermasterSelectedItemId(row.itemId)
-							requestSell(row)
+							setQuartermasterConfirmItemId(row.itemId)
 						end,
 					}, {
 						Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
-					}) else nil,
-				})
+						Stroke = React.createElement("UIStroke", {
+							Thickness = if isSelected then 1.5 else 1,
+							Transparency = if isSelected then 0.05 else 0.2,
+							Color = Color3.fromRGB(255, 225, 130),
+						}),
+						Accent = React.createElement("Frame", {
+							Position = UDim2.fromOffset(0, 0),
+							Size = UDim2.new(0, 4, 1, 0),
+							BackgroundColor3 = if isSelected then Color3.fromRGB(255, 225, 130) else Color3.fromRGB(74, 80, 92),
+							BorderSizePixel = 0,
+						}),
+						SourcePill = React.createElement("Frame", {
+							Position = UDim2.fromOffset(16, 12),
+							Size = UDim2.fromOffset(82, 22),
+							BackgroundColor3 = sourceColor(row.source),
+							BackgroundTransparency = 0.15,
+							BorderSizePixel = 0,
+						}, {
+							Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
+							Label = React.createElement("TextLabel", {
+								Size = UDim2.fromScale(1, 1),
+								BackgroundTransparency = 1,
+								Text = string.upper(sourceLabel(row.source)),
+								Font = Enum.Font.Code,
+								TextSize = 11,
+								TextColor3 = Color3.fromRGB(18, 18, 18),
+							}),
+						}),
+						ValuePill = React.createElement("Frame", {
+							AnchorPoint = Vector2.new(1, 0),
+							Position = UDim2.new(1, -14, 0, 12),
+							Size = UDim2.fromOffset(106, 24),
+							BackgroundColor3 = Color3.fromRGB(20, 42, 24),
+							BackgroundTransparency = 0.05,
+							BorderSizePixel = 0,
+						}, {
+							Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
+							Label = React.createElement("TextLabel", {
+								Size = UDim2.fromScale(1, 1),
+								BackgroundTransparency = 1,
+								Text = string.format("+%d REQ", row.value),
+								Font = Enum.Font.Code,
+								TextSize = 13,
+								TextColor3 = Color3.fromRGB(120, 255, 140),
+							}),
+						}),
+						Name = React.createElement("TextLabel", {
+							Position = UDim2.fromOffset(16, 40),
+							Size = UDim2.new(1, -32, 0, 24),
+							BackgroundTransparency = 1,
+							Text = row.displayName,
+							Font = Enum.Font.GothamBold,
+							TextSize = 18,
+							TextWrapped = false,
+							TextColor3 = Color3.new(1, 1, 1),
+							TextXAlignment = Enum.TextXAlignment.Left,
+						}),
+						Meta = React.createElement("TextLabel", {
+							Position = UDim2.fromOffset(16, 66),
+							Size = UDim2.new(1, -32, 0, 16),
+							BackgroundTransparency = 1,
+							Text = string.format("%s / %s", string.upper(row.category), string.upper(tostring(row.origin or "BroughtIn"))),
+							Font = Enum.Font.Code,
+							TextSize = 11,
+							TextColor3 = Color3.fromRGB(186, 196, 202),
+							TextXAlignment = Enum.TextXAlignment.Left,
+						}),
+						Hint = React.createElement("TextLabel", {
+							AnchorPoint = Vector2.new(0, 1),
+							Position = UDim2.new(0, 16, 1, -10),
+							Size = UDim2.new(1, -32, 0, 14),
+							BackgroundTransparency = 1,
+							Text = "Tap to review requisition sale",
+							Font = Enum.Font.Gotham,
+							TextSize = 11,
+							TextColor3 = Color3.fromRGB(150, 158, 168),
+							TextXAlignment = Enum.TextXAlignment.Left,
+						}),
+					})
+				else
+					listChildren["Item" .. index] = React.createElement("TextButton", {
+						LayoutOrder = index,
+						Size = UDim2.fromScale(1, 1),
+						BackgroundColor3 = if isSelected then Color3.fromRGB(28, 30, 18) else Color3.fromRGB(15, 17, 21),
+						BackgroundTransparency = 0.02,
+						BorderSizePixel = 0,
+						Text = "",
+						AutoButtonColor = not isPending,
+						[React.Event.Activated] = function()
+							if isPending then
+								return
+							end
+							setQuartermasterSelectedItemId(row.itemId)
+						end,
+					}, {
+						Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 12) }),
+						Fill = React.createElement("UIGradient", {
+							Rotation = 90,
+							Color = ColorSequence.new({
+								ColorSequenceKeypoint.new(0, if isSelected then Color3.fromRGB(34, 36, 24) else Color3.fromRGB(22, 24, 30)),
+								ColorSequenceKeypoint.new(1, if isSelected then Color3.fromRGB(14, 15, 12) else Color3.fromRGB(11, 12, 16)),
+							}),
+						}),
+						Stroke = React.createElement("UIStroke", {
+							Thickness = if isSelected then 1.5 else 1,
+							Transparency = if isSelected then 0.03 else 0.2,
+							Color = Color3.fromRGB(255, 225, 130),
+						}),
+						TopAccent = React.createElement("Frame", {
+							Position = UDim2.fromOffset(0, 0),
+							Size = UDim2.new(1, 0, 0, 3),
+							BackgroundColor3 = if isSelected then Color3.fromRGB(255, 225, 130) else Color3.fromRGB(59, 66, 78),
+							BorderSizePixel = 0,
+						}, {
+							Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
+						}),
+						SourcePill = React.createElement("Frame", {
+							Position = UDim2.fromOffset(14, 14),
+							Size = UDim2.fromOffset(78, 22),
+							BackgroundColor3 = sourceColor(row.source),
+							BackgroundTransparency = 0.1,
+							BorderSizePixel = 0,
+						}, {
+							Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
+							Label = React.createElement("TextLabel", {
+								Size = UDim2.fromScale(1, 1),
+								BackgroundTransparency = 1,
+								Text = string.upper(sourceLabel(row.source)),
+								Font = Enum.Font.Code,
+								TextSize = 10,
+								TextColor3 = Color3.fromRGB(14, 16, 18),
+							}),
+						}),
+						ValuePill = React.createElement("Frame", {
+							AnchorPoint = Vector2.new(1, 0),
+							Position = UDim2.new(1, -14, 0, 14),
+							Size = UDim2.fromOffset(100, 24),
+							BackgroundColor3 = Color3.fromRGB(14, 44, 24),
+							BackgroundTransparency = 0.02,
+							BorderSizePixel = 0,
+						}, {
+							Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
+							Label = React.createElement("TextLabel", {
+								Size = UDim2.fromScale(1, 1),
+								BackgroundTransparency = 1,
+								Text = string.format("+%d REQ", row.value),
+								Font = Enum.Font.Code,
+								TextSize = 12,
+								TextColor3 = Color3.fromRGB(120, 255, 140),
+							}),
+						}),
+						Name = React.createElement("TextLabel", {
+							Position = UDim2.fromOffset(14, 48),
+							Size = UDim2.new(1, -28, 0, 44),
+							BackgroundTransparency = 1,
+							Text = row.displayName,
+							Font = Enum.Font.GothamBold,
+							TextSize = 18,
+							TextWrapped = true,
+							TextColor3 = Color3.new(1, 1, 1),
+							TextXAlignment = Enum.TextXAlignment.Left,
+							TextYAlignment = Enum.TextYAlignment.Top,
+						}),
+						Meta = React.createElement("TextLabel", {
+							Position = UDim2.fromOffset(14, 96),
+							Size = UDim2.new(1, -28, 0, 16),
+							BackgroundTransparency = 1,
+							Text = string.format("%s // %s", string.upper(row.category), string.upper(tostring(row.origin or "BroughtIn"))),
+							Font = Enum.Font.Code,
+							TextSize = 11,
+							TextColor3 = Color3.fromRGB(180, 189, 200),
+							TextXAlignment = Enum.TextXAlignment.Left,
+						}),
+						Directive = React.createElement("TextLabel", {
+							Position = UDim2.fromOffset(14, 116),
+							Size = UDim2.new(1, -28, 0, 14),
+							BackgroundTransparency = 1,
+							Text = "",
+							Font = Enum.Font.Code,
+							TextSize = 10,
+							TextColor3 = Color3.fromRGB(124, 132, 144),
+							TextXAlignment = Enum.TextXAlignment.Left,
+						}),
+						Sell = React.createElement("TextButton", {
+							AnchorPoint = Vector2.new(1, 1),
+							Position = UDim2.new(1, -14, 1, -14),
+							Size = UDim2.fromOffset(108, 34),
+							BackgroundColor3 = if isPending then Color3.fromRGB(48, 48, 48) else Color3.fromRGB(84, 64, 28),
+							BorderSizePixel = 0,
+							Text = if isPending then "Selling..." else "Sell",
+							Font = Enum.Font.GothamBold,
+							TextSize = 14,
+							TextColor3 = Color3.new(1, 1, 1),
+							AutoButtonColor = not isPending,
+							Active = not isPending,
+							[React.Event.Activated] = function()
+								setQuartermasterSelectedItemId(row.itemId)
+								requestSell(row)
+							end,
+						}, {
+							Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
+							Stroke = React.createElement("UIStroke", {
+								Thickness = 1,
+								Transparency = 0.16,
+								Color = Color3.fromRGB(255, 225, 130),
+							}),
+						}),
+					})
+				end
 			end
 		end
 
@@ -1336,49 +1484,10 @@ local function LobbyApp()
 				BackgroundTransparency = if isMobile then 0.78 else 0.72,
 				BorderSizePixel = 0,
 			}),
-			CloseBands = if not isMobile then React.createElement("Frame", {
-				Position = UDim2.fromOffset(0, 0),
-				Size = UDim2.fromScale(1, 1),
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-			}, {
-				Top = React.createElement("TextButton", {
-					Position = UDim2.fromOffset(0, 0),
-					Size = UDim2.new(1, 0, 0.16, 0),
-					BackgroundTransparency = 1,
-					Text = "",
-					AutoButtonColor = false,
-					[React.Event.Activated] = closeTerminalUi,
-				}),
-				Bottom = React.createElement("TextButton", {
-					Position = UDim2.new(0, 0, 0.84, 0),
-					Size = UDim2.new(1, 0, 0.16, 0),
-					BackgroundTransparency = 1,
-					Text = "",
-					AutoButtonColor = false,
-					[React.Event.Activated] = closeTerminalUi,
-				}),
-				Left = React.createElement("TextButton", {
-					Position = UDim2.new(0, 0, 0.16, 0),
-					Size = UDim2.new(0.14, 0, 0.68, 0),
-					BackgroundTransparency = 1,
-					Text = "",
-					AutoButtonColor = false,
-					[React.Event.Activated] = closeTerminalUi,
-				}),
-				Right = React.createElement("TextButton", {
-					Position = UDim2.new(0.86, 0, 0.16, 0),
-					Size = UDim2.new(0.14, 0, 0.68, 0),
-					BackgroundTransparency = 1,
-					Text = "",
-					AutoButtonColor = false,
-					[React.Event.Activated] = closeTerminalUi,
-				}),
-			}) else nil,
 			Panel = React.createElement("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
-				Size = if isMobile then UDim2.new(1, -18, 1, -22) else UDim2.fromOffset(1040, 640),
+				Size = if isMobile then UDim2.new(1, -18, 1, -22) else UDim2.new(0.88, 0, 0.80, 0),
 				BackgroundColor3 = Color3.fromRGB(12, 14, 16),
 				BackgroundTransparency = 0.02,
 				BorderSizePixel = 0,
@@ -1391,8 +1500,8 @@ local function LobbyApp()
 				}),
 				Header = React.createElement("Frame", {
 					Position = UDim2.fromOffset(0, 0),
-					Size = UDim2.new(1, 0, 0, if isMobile then 150 else 122),
-					BackgroundColor3 = Color3.fromRGB(18, 20, 24),
+					Size = UDim2.new(1, 0, 0, if isMobile then 168 else 136),
+					BackgroundColor3 = Color3.fromRGB(16, 18, 22),
 					BackgroundTransparency = 0.02,
 					BorderSizePixel = 0,
 				}, {
@@ -1409,31 +1518,31 @@ local function LobbyApp()
 					}),
 					Title = React.createElement("TextLabel", {
 						Position = UDim2.fromOffset(20, if isMobile then 16 else 18),
-						Size = UDim2.new(1, if isMobile then -200 else -320, 0, if isMobile then 28 else 34),
+						Size = UDim2.new(1, if isMobile then -170 else -300, 0, if isMobile then 24 else 28),
 						BackgroundTransparency = 1,
-						Text = "Quartermaster Kiosk",
-						Font = Enum.Font.GothamBold,
-						TextSize = if isMobile then 24 else 30,
+						Text = "SCP FOUNDATION // QUARTERMASTER",
+						Font = Enum.Font.Code,
+						TextSize = if isMobile then 16 else 18,
 						TextColor3 = Color3.fromRGB(255, 234, 168),
 						TextXAlignment = Enum.TextXAlignment.Left,
 					}),
 					Subtitle = React.createElement("TextLabel", {
-						Position = UDim2.fromOffset(20, if isMobile then 48 else 58),
-						Size = UDim2.new(1, if isMobile then -40 else -350, 0, if isMobile then 40 else 20),
+						Position = UDim2.fromOffset(20, if isMobile then 42 else 46),
+						Size = UDim2.new(1, if isMobile then -40 else -320, 0, if isMobile then 52 else 38),
 						BackgroundTransparency = 1,
-						Text = "Convert recovered gear from your rig and backpack into persistent REQ credits.",
+						Text = "Recovered field gear can be cleared for requisition credits. Rig and backpack contents only.",
 						Font = Enum.Font.Gotham,
-						TextSize = 14,
-						TextWrapped = isMobile,
-						TextColor3 = Color3.fromRGB(205, 205, 205),
+						TextSize = if isMobile then 13 else 14,
+						TextWrapped = true,
+						TextColor3 = Color3.fromRGB(196, 201, 208),
 						TextXAlignment = Enum.TextXAlignment.Left,
 						TextYAlignment = Enum.TextYAlignment.Top,
 					}),
 					CreditCard = React.createElement("Frame", {
 						AnchorPoint = Vector2.new(1, 0),
-						Position = UDim2.new(1, if isMobile then -64 else -72, 0, if isMobile then 18 else 20),
-						Size = if isMobile then UDim2.fromOffset(132, 46) else UDim2.fromOffset(208, 54),
-						BackgroundColor3 = Color3.fromRGB(24, 40, 28),
+						Position = UDim2.new(1, if isMobile then -64 else -72, 0, if isMobile then 58 else 24),
+						Size = if isMobile then UDim2.fromOffset(132, 54) else UDim2.fromOffset(220, 64),
+						BackgroundColor3 = Color3.fromRGB(18, 34, 24),
 						BackgroundTransparency = 0.02,
 						BorderSizePixel = 0,
 					}, {
@@ -1444,29 +1553,29 @@ local function LobbyApp()
 							Color = Color3.fromRGB(105, 255, 125),
 						}),
 						Label = React.createElement("TextLabel", {
-							Position = UDim2.fromOffset(12, 7),
+							Position = UDim2.fromOffset(12, 8),
 							Size = UDim2.new(1, -24, 0, 13),
 							BackgroundTransparency = 1,
-							Text = "REQ CREDITS",
-							Font = Enum.Font.GothamBold,
+							Text = "REQ BALANCE",
+							Font = Enum.Font.Code,
 							TextSize = if isMobile then 10 else 11,
 							TextColor3 = Color3.fromRGB(120, 255, 140),
 							TextXAlignment = Enum.TextXAlignment.Left,
 						}),
 						Value = React.createElement("TextLabel", {
-							Position = UDim2.fromOffset(12, if isMobile then 20 else 22),
+							Position = UDim2.fromOffset(12, if isMobile then 22 else 26),
 							Size = UDim2.new(1, -24, 0, 24),
 							BackgroundTransparency = 1,
 							Text = formatReqCredits(quartermasterState.reqCredits),
 							Font = Enum.Font.GothamBold,
-							TextSize = if isMobile then 19 else 22,
+							TextSize = if isMobile then 18 else 24,
 							TextColor3 = Color3.new(1, 1, 1),
 							TextXAlignment = Enum.TextXAlignment.Left,
 						}),
 					}),
 					CloseButton = React.createElement("TextButton", {
 						AnchorPoint = Vector2.new(1, 0),
-						Position = UDim2.new(1, -20, 0, if isMobile then 18 else 20),
+						Position = UDim2.new(1, -18, 0, 14),
 						Size = UDim2.fromOffset(if isMobile then 34 else 36, if isMobile then 34 else 36),
 						BackgroundColor3 = Color3.fromRGB(28, 28, 28),
 						BorderSizePixel = 0,
@@ -1479,7 +1588,7 @@ local function LobbyApp()
 						Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
 					}),
 					Tabs = React.createElement("Frame", {
-						Position = UDim2.fromOffset(20, if isMobile then 102 else 78),
+						Position = UDim2.fromOffset(20, if isMobile then 122 else 96),
 						Size = if isMobile then UDim2.new(1, -40, 0, 38) else UDim2.new(0, 330, 0, 34),
 						BackgroundTransparency = 1,
 					}, {
@@ -1493,19 +1602,35 @@ local function LobbyApp()
 						Backpack = makeTabButton("Backpack", "backpack", if isMobile then 116 else 106),
 					}),
 				}),
-				Notice = React.createElement("TextLabel", {
-					Position = if isMobile then UDim2.fromOffset(20, 158) else UDim2.new(0.62, 24, 0, 134),
-					Size = if isMobile then UDim2.new(1, -40, 0, 18) else UDim2.new(0.38, -44, 0, 18),
-					BackgroundTransparency = 1,
-					Text = quartermasterState.notice,
-					Font = Enum.Font.GothamMedium,
-					TextSize = if isMobile then 12 else 13,
-					TextColor3 = Color3.fromRGB(255, 210, 120),
-					TextXAlignment = Enum.TextXAlignment.Left,
-				}),
+				NoticeToast = if quartermasterState.notice ~= "" then React.createElement("Frame", {
+					AnchorPoint = if isMobile then Vector2.new(0, 0) else Vector2.new(0.5, 0),
+					Position = if isMobile then UDim2.fromOffset(20, 166) else UDim2.new(0.5, 0, 0, 116),
+					Size = if isMobile then UDim2.new(1, -40, 0, 28) else UDim2.fromOffset(300, 30),
+					BackgroundColor3 = Color3.fromRGB(18, 34, 24),
+					BackgroundTransparency = 0.04,
+					BorderSizePixel = 0,
+					ZIndex = 12,
+				}, {
+					Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
+					Stroke = React.createElement("UIStroke", {
+						Thickness = 1,
+						Transparency = 0.2,
+						Color = Color3.fromRGB(105, 255, 125),
+					}),
+					Text = React.createElement("TextLabel", {
+						Size = UDim2.fromScale(1, 1),
+						BackgroundTransparency = 1,
+						Text = string.upper(quartermasterState.notice),
+						Font = Enum.Font.Code,
+						TextSize = if isMobile then 11 else 12,
+						TextColor3 = Color3.fromRGB(140, 255, 150),
+						TextXAlignment = Enum.TextXAlignment.Center,
+						ZIndex = 13,
+					}),
+				}) else nil,
 				ListShell = React.createElement("Frame", {
-					Position = if isMobile then UDim2.fromOffset(20, 184) else UDim2.fromOffset(20, 146),
-					Size = if isMobile then UDim2.new(1, -40, 1, -204) else UDim2.new(0.60, -30, 1, -166),
+					Position = if isMobile then UDim2.fromOffset(20, 200) else UDim2.fromOffset(20, 168),
+					Size = if isMobile then UDim2.new(1, -40, 1, -220) else UDim2.new(0.64, -30, 1, -180),
 					BackgroundColor3 = Color3.fromRGB(15, 17, 21),
 					BackgroundTransparency = 0.03,
 					BorderSizePixel = 0,
@@ -1520,26 +1645,36 @@ local function LobbyApp()
 						Position = UDim2.fromOffset(16, 12),
 						Size = UDim2.new(1, -32, 0, 18),
 						BackgroundTransparency = 1,
-						Text = "SELLABLE INVENTORY",
-						Font = Enum.Font.GothamBold,
-						TextSize = if isMobile then 12 else 11,
+						Text = if isMobile then "CLEARANCE INVENTORY" else "CLEARANCE GRID",
+						Font = Enum.Font.Code,
+						TextSize = if isMobile then 11 else 11,
 						TextColor3 = Color3.fromRGB(255, 225, 130),
 						TextXAlignment = Enum.TextXAlignment.Left,
 					}),
+					ListSubtitle = React.createElement("TextLabel", {
+						Position = UDim2.fromOffset(16, 28),
+						Size = UDim2.new(1, -32, 0, 16),
+						BackgroundTransparency = 1,
+						Text = if isMobile then "Tap an item to confirm sale." else "Recovered gear displayed in a clearance grid for fast review and sale.",
+						Font = Enum.Font.Gotham,
+						TextSize = if isMobile then 11 else 12,
+						TextColor3 = Color3.fromRGB(164, 170, 180),
+						TextXAlignment = Enum.TextXAlignment.Left,
+					}),
 					List = React.createElement("ScrollingFrame", {
-						Position = UDim2.fromOffset(16, 38),
-						Size = UDim2.new(1, -32, 1, -54),
+						Position = UDim2.fromOffset(16, 52),
+						Size = UDim2.new(1, -32, 1, -68),
 						BackgroundTransparency = 1,
 						BorderSizePixel = 0,
 						AutomaticCanvasSize = Enum.AutomaticSize.Y,
 						CanvasSize = UDim2.fromOffset(0, 0),
 						ScrollingDirection = Enum.ScrollingDirection.Y,
-						ScrollBarThickness = if isMobile then 5 else 6,
+						ScrollBarThickness = if isMobile then 5 else 8,
 					}, listChildren),
 				}),
 				Details = if not isMobile then React.createElement("Frame", {
-					Position = UDim2.new(0.62, 10, 0, 146),
-					Size = UDim2.new(0.38, -30, 1, -166),
+					Position = UDim2.new(0.66, 10, 0, 168),
+					Size = UDim2.new(0.34, -30, 1, -180),
 					BackgroundColor3 = Color3.fromRGB(15, 17, 21),
 					BackgroundTransparency = 0.03,
 					BorderSizePixel = 0,
@@ -1555,69 +1690,97 @@ local function LobbyApp()
 						Size = UDim2.new(1, -36, 0, 16),
 						BackgroundTransparency = 1,
 						Text = "SALE PREVIEW",
-						Font = Enum.Font.GothamBold,
+						Font = Enum.Font.Code,
 						TextSize = 11,
 						TextColor3 = Color3.fromRGB(255, 225, 130),
 						TextXAlignment = Enum.TextXAlignment.Left,
 					}),
+					SubLabel = React.createElement("TextLabel", {
+						Position = UDim2.fromOffset(18, 30),
+						Size = UDim2.new(1, -36, 0, 16),
+						BackgroundTransparency = 1,
+						Text = "Selected item details and clearance value.",
+						Font = Enum.Font.Gotham,
+						TextSize = 12,
+						TextColor3 = Color3.fromRGB(164, 170, 180),
+						TextXAlignment = Enum.TextXAlignment.Left,
+					}),
 					Card = React.createElement("Frame", {
-						Position = UDim2.fromOffset(18, 40),
-						Size = UDim2.new(1, -36, 0, 190),
+						Position = UDim2.fromOffset(18, 56),
+						Size = UDim2.new(1, -36, 0, 208),
 						BackgroundColor3 = Color3.fromRGB(22, 24, 30),
 						BackgroundTransparency = 0.02,
 						BorderSizePixel = 0,
 					}, {
 						Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 12) }),
+						TopAccent = React.createElement("Frame", {
+							Position = UDim2.fromOffset(0, 0),
+							Size = UDim2.new(1, 0, 0, 3),
+							BackgroundColor3 = Color3.fromRGB(255, 225, 130),
+							BorderSizePixel = 0,
+						}, {
+							Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 999) }),
+						}),
 						Title = React.createElement("TextLabel", {
 							Position = UDim2.fromOffset(16, 18),
-							Size = UDim2.new(1, -32, 0, 46),
+							Size = UDim2.new(1, -32, 0, 50),
 							BackgroundTransparency = 1,
 							Text = if selectedQuartermasterItem then selectedQuartermasterItem.displayName else "Select an item",
 							Font = Enum.Font.GothamBold,
-							TextSize = 24,
+							TextSize = 22,
 							TextWrapped = true,
 							TextColor3 = Color3.new(1, 1, 1),
 							TextXAlignment = Enum.TextXAlignment.Left,
 							TextYAlignment = Enum.TextYAlignment.Top,
 						}),
 						Source = React.createElement("TextLabel", {
-							Position = UDim2.fromOffset(16, 84),
+							Position = UDim2.fromOffset(16, 92),
 							Size = UDim2.new(1, -32, 0, 18),
 							BackgroundTransparency = 1,
-							Text = if selectedQuartermasterItem then string.format("%s  |  %s", sourceLabel(selectedQuartermasterItem.source), selectedQuartermasterItem.category) else "Rig and backpack items can be sold here.",
+							Text = if selectedQuartermasterItem then string.format("SOURCE // %s", string.upper(sourceLabel(selectedQuartermasterItem.source))) else "RIG AND BACKPACK ITEMS MAY BE CLEARED HERE.",
 							Font = Enum.Font.Code,
-							TextSize = 13,
+							TextSize = 12,
 							TextColor3 = Color3.fromRGB(210, 210, 210),
 							TextXAlignment = Enum.TextXAlignment.Left,
 						}),
-						Origin = React.createElement("TextLabel", {
-							Position = UDim2.fromOffset(16, 108),
+						Category = React.createElement("TextLabel", {
+							Position = UDim2.fromOffset(16, 116),
 							Size = UDim2.new(1, -32, 0, 18),
 							BackgroundTransparency = 1,
-							Text = if selectedQuartermasterItem then "Origin: " .. tostring(selectedQuartermasterItem.origin or "BroughtIn") else "",
-							Font = Enum.Font.Gotham,
-							TextSize = 13,
+							Text = if selectedQuartermasterItem then string.format("CATEGORY // %s", string.upper(selectedQuartermasterItem.category)) else "",
+							Font = Enum.Font.Code,
+							TextSize = 12,
+							TextColor3 = Color3.fromRGB(185, 185, 185),
+							TextXAlignment = Enum.TextXAlignment.Left,
+						}),
+						Origin = React.createElement("TextLabel", {
+							Position = UDim2.fromOffset(16, 140),
+							Size = UDim2.new(1, -32, 0, 18),
+							BackgroundTransparency = 1,
+							Text = if selectedQuartermasterItem then "ORIGIN / " .. string.upper(tostring(selectedQuartermasterItem.origin or "BroughtIn")) else "",
+							Font = Enum.Font.Code,
+							TextSize = 12,
 							TextColor3 = Color3.fromRGB(185, 185, 185),
 							TextXAlignment = Enum.TextXAlignment.Left,
 						}),
 						Value = React.createElement("TextLabel", {
-							Position = UDim2.fromOffset(16, 136),
+							Position = UDim2.fromOffset(16, 170),
 							Size = UDim2.new(1, -32, 0, 30),
 							BackgroundTransparency = 1,
 							Text = if selectedQuartermasterItem then string.format("+%d REQ", selectedQuartermasterItem.value) else "--",
 							Font = Enum.Font.GothamBold,
-							TextSize = 30,
+							TextSize = 28,
 							TextColor3 = Color3.fromRGB(120, 255, 140),
 							TextXAlignment = Enum.TextXAlignment.Left,
 						}),
 					}),
 					Policy = React.createElement("TextLabel", {
-						Position = UDim2.fromOffset(18, 248),
+						Position = UDim2.fromOffset(18, 278),
 						Size = UDim2.new(1, -36, 0, 56),
 						BackgroundTransparency = 1,
-						Text = "Weapons in equipped slots and stash contents are excluded to prevent accidental sales.",
+						Text = "Equipped weapons and stash contents are locked from sale to prevent accidental loss.",
 						Font = Enum.Font.Gotham,
-						TextSize = 14,
+						TextSize = 13,
 						TextWrapped = true,
 						TextColor3 = Color3.fromRGB(195, 195, 195),
 						TextXAlignment = Enum.TextXAlignment.Left,

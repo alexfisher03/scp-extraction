@@ -31,6 +31,8 @@ function ItemInstance.fromInventoryItem(item: any): any
 		itemId = item.itemId,
 		templateId = item.templateId,
 		category = item.category,
+		inventorySize = cloneValue(item.inventorySize),
+		inventoryRotated = item.inventoryRotated == true,
 		origin = if item.origin == "Looted" then "Looted" else "BroughtIn",
 		state = {
 			locationState = item.locationState,
@@ -55,6 +57,8 @@ function ItemInstance.toInventoryItem(item: any, locationState: string?): any
 		itemId = item.itemId,
 		templateId = item.templateId,
 		category = item.category,
+		inventorySize = cloneValue(item.inventorySize or state.inventorySize),
+		inventoryRotated = item.inventoryRotated == true,
 		origin = if item.origin == "Looted" then "Looted" else "BroughtIn",
 		locationState = locationState or state.locationState,
 		stack = state.stack,

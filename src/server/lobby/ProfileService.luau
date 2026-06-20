@@ -4,7 +4,9 @@ local DataStoreService = game:GetService("DataStoreService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 
+local InventoryGrid = require(ReplicatedStorage.Shared.InventoryGrid)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
 local PlayerProfile = require(ReplicatedStorage.Shared.PlayerProfile)
 local ProfileInventory = require(ReplicatedStorage.Shared.ProfileInventory)
@@ -23,6 +25,7 @@ local MAX_RETRIES = 3
 type CachedProfile = {
 	profile: any,
 	loaded: boolean,
+	loading: boolean,
 	saveScheduled: boolean,
 	dirty: boolean,
 }
@@ -69,6 +72,7 @@ local function getCache(userId: number): CachedProfile
 	cached = {
 		profile = PlayerProfile.createDefault(),
 		loaded = false,
+		loading = false,
 		saveScheduled = false,
 		dirty = false,
 	}
@@ -81,6 +85,16 @@ function ProfileService.loadProfile(userId: number): any
 	if cached.loaded then
 		return cached.profile
 	end
+
+	while cached.loading and not cached.loaded do
+		task.wait()
+	end
+
+	if cached.loaded then
+		return cached.profile
+	end
+
+	cached.loading = true
 
 	local success, loadedProfile = runWithRetries(string.format("load userId=%d", userId), function()
 		return PROFILE_STORE:GetAsync(tostring(userId))
@@ -96,6 +110,7 @@ function ProfileService.loadProfile(userId: number): any
 		warn(string.format("[ProfileService] load fail userId=%d using defaults", userId))
 	end
 
+	cached.loading = false
 	return cached.profile
 end
 
@@ -204,6 +219,45 @@ function ProfileService.restoreProfileSnapshot(userId: number, profileSnapshot: 
 	cached.dirty = true
 end
 
+function ProfileService.markActiveRaid(userId: number, raidId: string)
+	local profile = ProfileService.loadProfile(userId)
+	profile.activeRaid = {
+		raidId = raidId,
+		startedAt = Workspace:GetServerTimeNow(),
+	}
+	local cached = getCache(userId)
+	cached.profile = profile
+	cached.loaded = true
+	cached.dirty = true
+end
+
+function ProfileService.clearActiveRaid(userId: number)
+	local profile = ProfileService.loadProfile(userId)
+	if profile.activeRaid ~= nil then
+		profile.activeRaid = nil
+		local cached = getCache(userId)
+		cached.profile = profile
+		cached.loaded = true
+		cached.dirty = true
+	end
+end
+
+function ProfileService.consumeAbandonedRaid(userId: number): any?
+	local profile = ProfileService.loadProfile(userId)
+	if typeof(profile.activeRaid) ~= "table" then
+		return nil
+	end
+
+	local abandonedRaid = deepClone(profile.activeRaid)
+	profile.activeRaid = nil
+	local cached = getCache(userId)
+	cached.profile = profile
+	cached.loaded = true
+	cached.dirty = true
+	ProfileService.forceSave(userId, "abandoned_raid_loss")
+	return abandonedRaid
+end
+
 function ProfileService.buildRaidInventorySnapshot(userId: number): any
 	local profile = ProfileService.loadProfile(userId)
 	return ProfileInventory.buildRaidSnapshot(profile)
@@ -262,16 +316,16 @@ local function collectReferencedItemIds(profile: any): {[string]: boolean}
 	addItemId(profile.loadout.pistol)
 	addItemId(profile.loadout.melee)
 
-	for _, itemId in ipairs(profile.loadout.rig) do
+	for _, itemId in pairs(profile.loadout.rig) do
 		addItemId(itemId)
 	end
-	for _, itemId in ipairs(profile.loadout.backpack) do
+	for _, itemId in pairs(profile.loadout.backpack) do
 		addItemId(itemId)
 	end
-	for _, itemId in ipairs(profile.loadout.secure) do
+	for _, itemId in pairs(profile.loadout.secure) do
 		addItemId(itemId)
 	end
-	for _, itemId in ipairs(profile.stash) do
+	for _, itemId in pairs(profile.stash) do
 		addItemId(itemId)
 	end
 
@@ -302,6 +356,40 @@ local function pruneUnreferencedItems(profile: any)
 	end
 end
 
+local function findItemInList(list: any, itemId: string, capacity: number?): number?
+	if typeof(list) ~= "table" then
+		return nil
+	end
+
+	local maxIndex = capacity or #list
+	for index = 1, maxIndex do
+		if list[index] == itemId then
+			return index
+		end
+	end
+
+	return nil
+end
+
+local function findProfileGridContainer(profile: any, itemId: string): ({string?}?, number?, string?, number?)
+	local stashIndex = findItemInList(profile.stash, itemId, profile.stashCapacity)
+	if stashIndex then
+		return profile.stash, stashIndex, "stash", profile.stashCapacity
+	end
+
+	local rigIndex = findItemInList(profile.loadout.rig, itemId, profile.rigCapacity)
+	if rigIndex then
+		return profile.loadout.rig, rigIndex, "rig", profile.rigCapacity
+	end
+
+	local backpackIndex = findItemInList(profile.loadout.backpack, itemId, profile.backpackCapacity)
+	if backpackIndex then
+		return profile.loadout.backpack, backpackIndex, "backpack", profile.backpackCapacity
+	end
+
+	return nil, nil, nil, nil
+end
+
 local function getSellDefinition(item: any): any?
 	if typeof(item) ~= "table" or typeof(item.templateId) ~= "string" then
 		return nil
@@ -310,25 +398,50 @@ local function getSellDefinition(item: any): any?
 	return LootDefinitions.get(item.templateId)
 end
 
-local function removeFromArray(list: {string}, itemId: string): number?
-	local index = table.find(list, itemId)
+local function removeFromGridList(list: {string?}, itemId: string, capacity: number): number?
+	local index = findItemInList(list, itemId, capacity)
 	if index then
-		table.remove(list, index)
+		list[index] = nil
 		return index
 	end
 
 	return nil
 end
 
+local function removeFromCarriedLoadout(profile: any, itemId: string): boolean
+	for slotName, slotItemId in pairs({
+		primaryA = profile.loadout.primaryA,
+		primaryB = profile.loadout.primaryB,
+		pistol = profile.loadout.pistol,
+		melee = profile.loadout.melee,
+	}) do
+		if slotItemId == itemId then
+			profile.loadout[slotName] = nil
+			return true
+		end
+	end
+
+	if removeFromGridList(profile.loadout.rig, itemId, profile.rigCapacity) then
+		return true
+	end
+
+	if removeFromGridList(profile.loadout.backpack, itemId, profile.backpackCapacity) then
+		return true
+	end
+
+	return false
+end
+
 local function listQuartermasterItems(profile: any): {any}
 	local sellableItems = {}
 	local orderedContainers = {
-		{ source = "rig", itemIds = profile.loadout.rig },
-		{ source = "backpack", itemIds = profile.loadout.backpack },
+		{ source = "rig", itemIds = profile.loadout.rig, capacity = profile.rigCapacity },
+		{ source = "backpack", itemIds = profile.loadout.backpack, capacity = profile.backpackCapacity },
 	}
 
 	for _, containerInfo in ipairs(orderedContainers) do
-		for _, itemId in ipairs(containerInfo.itemIds) do
+		for slotIndex = 1, containerInfo.capacity do
+			local itemId = containerInfo.itemIds[slotIndex]
 			local item = profile.items[itemId]
 			if typeof(item) == "table" then
 				local definition = getSellDefinition(item)
@@ -381,11 +494,12 @@ function ProfileService.handleQuartermasterSell(userId: number, itemId: any, sou
 
 	local profile = ProfileService.loadProfile(userId)
 	local container = if source == "rig" then profile.loadout.rig else profile.loadout.backpack
+	local containerCapacity = if source == "rig" then profile.rigCapacity else profile.backpackCapacity
 	if typeof(container) ~= "table" then
 		return false, "missing_container"
 	end
 
-	if table.find(container, itemId) == nil then
+	if findItemInList(container, itemId, containerCapacity) == nil then
 		return false, "item_not_owned"
 	end
 
@@ -401,7 +515,7 @@ function ProfileService.handleQuartermasterSell(userId: number, itemId: any, sou
 		return false, "not_sellable"
 	end
 
-	removeFromArray(container, itemId)
+	removeFromGridList(container, itemId, containerCapacity)
 	pruneUnreferencedItems(profile)
 	profile.reqCredits = (if typeof(profile.reqCredits) == "number" then profile.reqCredits else 0) + sellValue
 	ProfileService.scheduleSave(userId, "quartermaster_sell")
@@ -420,7 +534,15 @@ function ProfileService.handleStashAction(userId: number, action: any): (boolean
 		if typeof(itemId) ~= "string" then
 			return false, "invalid_item"
 		end
-		if #profile.stash >= profile.stashCapacity then
+		local destIndex = if typeof(action.destIndex) == "number" then action.destIndex else nil
+
+		local item = profile.items[itemId]
+		if typeof(item) ~= "table" then
+			return false, "missing_item"
+		end
+
+		local stashDestinationIndex = InventoryGrid.placeItem(profile.stash, profile.items, profile.stashCapacity, "stash", item, destIndex, itemId)
+		if not stashDestinationIndex then
 			return false, "stash_full"
 		end
 
@@ -439,17 +561,17 @@ function ProfileService.handleStashAction(userId: number, action: any): (boolean
 		end
 
 		if not removed then
-			local rigIndex = table.find(profile.loadout.rig, itemId)
+			local rigIndex = findItemInList(profile.loadout.rig, itemId, profile.rigCapacity)
 			if rigIndex then
-				table.remove(profile.loadout.rig, rigIndex)
+				profile.loadout.rig[rigIndex] = nil
 				removed = true
 			end
 		end
 
 		if not removed then
-			local backpackIndex = table.find(profile.loadout.backpack, itemId)
+			local backpackIndex = findItemInList(profile.loadout.backpack, itemId, profile.backpackCapacity)
 			if backpackIndex then
-				table.remove(profile.loadout.backpack, backpackIndex)
+				profile.loadout.backpack[backpackIndex] = nil
 				removed = true
 			end
 		end
@@ -458,7 +580,7 @@ function ProfileService.handleStashAction(userId: number, action: any): (boolean
 			return false, "item_not_carried"
 		end
 
-		table.insert(profile.stash, itemId)
+		profile.stash[stashDestinationIndex] = itemId
 		ProfileService.scheduleSave(userId, "stash_move")
 		return true, nil
 	end
@@ -466,11 +588,12 @@ function ProfileService.handleStashAction(userId: number, action: any): (boolean
 	if kind == "MoveToInventory" then
 		local itemId = action.itemId
 		local destination = action.dest
+		local destIndex = if typeof(action.destIndex) == "number" then action.destIndex else nil
 		if typeof(itemId) ~= "string" or typeof(destination) ~= "string" then
 			return false, "invalid_move"
 		end
 
-		local stashIndex = table.find(profile.stash, itemId)
+		local stashIndex = findItemInList(profile.stash, itemId, profile.stashCapacity)
 		if not stashIndex then
 			return false, "item_not_in_stash"
 		end
@@ -484,21 +607,23 @@ function ProfileService.handleStashAction(userId: number, action: any): (boolean
 			if item.category ~= "mag" and item.category ~= "med" then
 				return false, "invalid_rig_category"
 			end
-			if #profile.loadout.rig >= profile.rigCapacity then
+			local rigDestinationIndex = InventoryGrid.placeItem(profile.loadout.rig, profile.items, profile.rigCapacity, "rig", item, destIndex, itemId)
+			if not rigDestinationIndex then
 				return false, "rig_full"
 			end
-			table.remove(profile.stash, stashIndex)
-			table.insert(profile.loadout.rig, itemId)
+			profile.stash[stashIndex] = nil
+			profile.loadout.rig[rigDestinationIndex] = itemId
 			ProfileService.scheduleSave(userId, "stash_move")
 			return true, nil
 		end
 
 		if destination == "backpack" then
-			if #profile.loadout.backpack >= profile.backpackCapacity then
+			local backpackDestinationIndex = InventoryGrid.placeItem(profile.loadout.backpack, profile.items, profile.backpackCapacity, "backpack", item, destIndex, itemId)
+			if not backpackDestinationIndex then
 				return false, "backpack_full"
 			end
-			table.remove(profile.stash, stashIndex)
-			table.insert(profile.loadout.backpack, itemId)
+			profile.stash[stashIndex] = nil
+			profile.loadout.backpack[backpackDestinationIndex] = itemId
 			ProfileService.scheduleSave(userId, "stash_move")
 			return true, nil
 		end
@@ -510,9 +635,98 @@ function ProfileService.handleStashAction(userId: number, action: any): (boolean
 			return false, "slot_occupied"
 		end
 
-		table.remove(profile.stash, stashIndex)
+		profile.stash[stashIndex] = nil
 		profile.loadout[destination] = itemId
 		ProfileService.scheduleSave(userId, "stash_move")
+		return true, nil
+	end
+
+	if kind == "MoveWithinInventory" then
+		local itemId = action.itemId
+		local destination = action.dest
+		local destIndex = if typeof(action.destIndex) == "number" then action.destIndex else nil
+		if typeof(itemId) ~= "string" or typeof(destination) ~= "string" then
+			return false, "invalid_move"
+		end
+
+		local item = profile.items[itemId]
+		if typeof(item) ~= "table" then
+			return false, "missing_item"
+		end
+
+		if destination == "rig" then
+			if item.category ~= "mag" and item.category ~= "med" then
+				return false, "invalid_rig_category"
+			end
+
+			local destinationIndex = InventoryGrid.placeItem(profile.loadout.rig, profile.items, profile.rigCapacity, "rig", item, destIndex, itemId)
+			if not destinationIndex then
+				return false, "rig_full"
+			end
+
+			if not removeFromCarriedLoadout(profile, itemId) then
+				return false, "item_not_carried"
+			end
+
+			profile.loadout.rig[destinationIndex] = itemId
+			ProfileService.scheduleSave(userId, "stash_move")
+			return true, nil
+		end
+
+		if destination == "backpack" then
+			local destinationIndex = InventoryGrid.placeItem(profile.loadout.backpack, profile.items, profile.backpackCapacity, "backpack", item, destIndex, itemId)
+			if not destinationIndex then
+				return false, "backpack_full"
+			end
+
+			if not removeFromCarriedLoadout(profile, itemId) then
+				return false, "item_not_carried"
+			end
+
+			profile.loadout.backpack[destinationIndex] = itemId
+			ProfileService.scheduleSave(userId, "stash_move")
+			return true, nil
+		end
+
+		if not isWeaponSlotDestinationValid(item, destination) then
+			return false, "invalid_slot_category"
+		end
+		if profile.loadout[destination] ~= nil and profile.loadout[destination] ~= itemId then
+			return false, "slot_occupied"
+		end
+
+		if not removeFromCarriedLoadout(profile, itemId) then
+			return false, "item_not_carried"
+		end
+
+		profile.loadout[destination] = itemId
+		ProfileService.scheduleSave(userId, "stash_move")
+		return true, nil
+	end
+
+	if kind == "RotateItem" then
+		local itemId = action.itemId
+		if typeof(itemId) ~= "string" then
+			return false, "invalid_item"
+		end
+
+		local item = profile.items[itemId]
+		if typeof(item) ~= "table" then
+			return false, "missing_item"
+		end
+
+		local container, anchorIndex, containerName, capacity = findProfileGridContainer(profile, itemId)
+		if not container or not anchorIndex or not containerName or not capacity then
+			return false, "item_not_in_grid"
+		end
+
+		item.inventoryRotated = not (item.inventoryRotated == true)
+		if not InventoryGrid.canFitAt(container, profile.items, capacity, containerName, item, anchorIndex, itemId) then
+			item.inventoryRotated = not (item.inventoryRotated == true)
+			return false, "rotate_blocked"
+		end
+
+		ProfileService.scheduleSave(userId, "stash_rotate")
 		return true, nil
 	end
 

@@ -7,6 +7,7 @@ local TeleportService = game:GetService("TeleportService")
 local Workspace = game:GetService("Workspace")
 
 local Net = require(ReplicatedStorage.Shared.Net)
+local InventoryGrid = require(ReplicatedStorage.Shared.InventoryGrid)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
 local RaidResult = require(ReplicatedStorage.Shared.RaidResult)
 local InventoryAuthority = require(script.Parent.inventory.InventoryAuthority)
@@ -990,14 +991,15 @@ local function handleBodyTransfer(player: Player, bodyId: string, itemId: string
 			return
 		end
 
-		if toIndex ~= nil then
-			local requestedIndex = math.floor(toIndex)
-			if requestedIndex >= 1 and requestedIndex <= destination.capacity and destination.itemIds[requestedIndex] == nil then
-				destinationIndex = requestedIndex
-			end
-		else
-			destinationIndex = getFirstEmptySlot(destination.itemIds, destination.capacity)
-		end
+		destinationIndex = InventoryGrid.placeItem(
+			destination.itemIds,
+			inventoryState.itemsById,
+			destination.capacity,
+			toContainerName,
+			item,
+			toIndex,
+			nil
+		)
 
 		if not destinationIndex then
 			return

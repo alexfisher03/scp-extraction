@@ -221,8 +221,9 @@ local function startMatch(entryCount: number)
 		return
 	end
 
+	local raidId = HttpService:GenerateGUID(false)
 	local teleportData = {
-		raidId = HttpService:GenerateGUID(false),
+		raidId = raidId,
 		partyUserIds = partyUserIds,
 		createdAt = Workspace:GetServerTimeNow(),
 		loadoutSeed = {},
@@ -233,7 +234,13 @@ local function startMatch(entryCount: number)
 
 	for _, queuedPlayer in ipairs(playersToTeleport) do
 		local userId = queuedPlayer.UserId
+		local preRaidProfileSnapshot = ProfileService.getProfileClone(userId)
+		ProfileService.setPreRaidProfileSnapshot(userId, preRaidProfileSnapshot)
+		local inventorySnapshot = ProfileService.buildRaidInventorySnapshot(userId)
+
+		ProfileService.markActiveRaid(userId, raidId)
 		if not ProfileService.forceSave(userId, "deploy") then
+			ProfileService.clearActiveRaid(userId)
 			for _, entry in ipairs(entries) do
 				batchIdByUserId[entry.player.UserId] = nil
 			end
@@ -243,10 +250,6 @@ local function startMatch(entryCount: number)
 			starting = false
 			return
 		end
-
-		local preRaidProfileSnapshot = ProfileService.getProfileClone(userId)
-		ProfileService.setPreRaidProfileSnapshot(userId, preRaidProfileSnapshot)
-		local inventorySnapshot = ProfileService.buildRaidInventorySnapshot(userId)
 
 		teleportData.inventorySnapshotsByUserId[tostring(userId)] = inventorySnapshot
 		teleportData.preRaidInventorySnapshotsByUserId[tostring(userId)] = inventorySnapshot
@@ -269,6 +272,7 @@ local function startMatch(entryCount: number)
 	if not teleportOk then
 		for _, entry in ipairs(entries) do
 			batchIdByUserId[entry.player.UserId] = nil
+			ProfileService.clearActiveRaid(entry.player.UserId)
 		end
 		pendingBatches[batchId] = nil
 		restoreEntriesToFront(entries)
@@ -334,6 +338,7 @@ TeleportService.TeleportInitFailed:Connect(function(player: Player)
 	batch.restored = true
 	for _, entry in ipairs(batch.entries) do
 		batchIdByUserId[entry.player.UserId] = nil
+		ProfileService.clearActiveRaid(entry.player.UserId)
 	end
 	restoreEntriesToFront(batch.entries)
 	nextRetryAt = Workspace:GetServerTimeNow() + RETRY_COOLDOWN_SECONDS
