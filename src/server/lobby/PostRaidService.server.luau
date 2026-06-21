@@ -158,11 +158,9 @@ local function handlePostRaidArrival(player: Player)
 		appliedSnapshot = ProfileService.getInventorySnapshot(player.UserId)
 	else
 		local preRaidProfileSnapshot = raidResult.preRaidProfileSnapshot
-		if preRaidProfileSnapshot ~= nil then
-			ProfileService.restoreProfileSnapshot(player.UserId, preRaidProfileSnapshot)
-		end
+		ProfileService.applyRaidLossSnapshot(player.UserId, preRaidProfileSnapshot)
 		ProfileService.clearActiveRaid(player.UserId)
-		ProfileService.forceSave(player.UserId, "raid_return_restore")
+		ProfileService.forceSave(player.UserId, "raid_return_loss")
 		appliedSnapshot = ProfileService.getInventorySnapshot(player.UserId)
 	end
 

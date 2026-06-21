@@ -238,7 +238,7 @@ local function startMatch(entryCount: number)
 		ProfileService.setPreRaidProfileSnapshot(userId, preRaidProfileSnapshot)
 		local inventorySnapshot = ProfileService.buildRaidInventorySnapshot(userId)
 
-		ProfileService.markActiveRaid(userId, raidId)
+		ProfileService.markActiveRaid(userId, raidId, preRaidProfileSnapshot)
 		if not ProfileService.forceSave(userId, "deploy") then
 			ProfileService.clearActiveRaid(userId)
 			for _, entry in ipairs(entries) do

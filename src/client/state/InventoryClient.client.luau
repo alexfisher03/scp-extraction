@@ -2,12 +2,12 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
 local ClientActionBridge = require(script.Parent:WaitForChild("ClientActionBridge"))
+local InputModeController = require(script.Parent:WaitForChild("InputModeController"))
 local InventoryStore = require(script.Parent:WaitForChild("InventoryStore"))
 
 if not (PlaceConfig.isRaidPlace() or PlaceConfig.isLobbyPlace()) then
@@ -21,93 +21,8 @@ local remotes = ReplicatedStorage:WaitForChild(Net.RemotesFolderName)
 local actionEvent = remotes:WaitForChild(Net.InventoryActionEventName) :: RemoteEvent
 local snapshotEvent = remotes:WaitForChild(Net.InventorySnapshotEventName) :: RemoteEvent
 
-local controls: any = nil
-local CLOSED_CAMERA_MODE = Enum.CameraMode.LockFirstPerson
-local OPEN_CAMERA_MODE = Enum.CameraMode.Classic
-local inventoryCameraConn: RBXScriptConnection? = nil
-local inventoryCameraStart: CFrame? = nil
-local inventoryAnchorStartPosition: Vector3? = nil
-
-local function getControls()
-	if controls then
-		return controls
-	end
-	local playerScripts = player:WaitForChild("PlayerScripts")
-	local playerModule = require(playerScripts:WaitForChild("PlayerModule"))
-	controls = playerModule:GetControls()
-	return controls
-end
-
-local function getCameraAnchor(): BasePart?
-	local character = player.Character
-	if not character then
-		return nil
-	end
-
-	return character:FindFirstChild("Head") :: BasePart?
-		or character:FindFirstChild("HumanoidRootPart") :: BasePart?
-end
-
-local function stopInventoryCameraFollow()
-	if inventoryCameraConn then
-		inventoryCameraConn:Disconnect()
-		inventoryCameraConn = nil
-	end
-	inventoryCameraStart = nil
-	inventoryAnchorStartPosition = nil
-end
-
-local function startInventoryCameraFollow()
-	stopInventoryCameraFollow()
-
-	local anchor = getCameraAnchor()
-	if not anchor or not camera then
-		return
-	end
-
-	inventoryCameraStart = camera.CFrame
-	inventoryAnchorStartPosition = anchor.Position
-
-	inventoryCameraConn = RunService.RenderStepped:Connect(function()
-		local currentAnchor = getCameraAnchor()
-		if not currentAnchor or not camera or not inventoryCameraStart or not inventoryAnchorStartPosition then
-			return
-		end
-
-		local positionDelta = currentAnchor.Position - inventoryAnchorStartPosition
-		local targetCameraCFrame = inventoryCameraStart + positionDelta
-		camera.CFrame = targetCameraCFrame
-		camera.Focus = targetCameraCFrame + targetCameraCFrame.LookVector
-	end)
-end
-
 local function applyInventoryInputMode(visible: boolean)
-	local ctl = getControls()
-
-	if visible then
-		ctl:Disable()
-
-		-- Free cursor for UI
-		UserInputService.MouseIconEnabled = true
-		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-		player.CameraMode = OPEN_CAMERA_MODE
-		if camera then
-			camera.CameraType = Enum.CameraType.Scriptable
-		end
-		startInventoryCameraFollow()
-	else
-		ctl:Enable()
-		stopInventoryCameraFollow()
-
-		-- Gameplay mouse lock
-		UserInputService.MouseIconEnabled = false
-		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
-
-		player.CameraMode = CLOSED_CAMERA_MODE
-		if camera then
-			camera.CameraType = Enum.CameraType.Custom
-		end
-	end
+	InputModeController.setUiLock("inventory", visible)
 end
 
 local function setInventoryVisible(visible: boolean)
@@ -145,6 +60,18 @@ local function closeInventory()
 	setInventoryVisible(false)
 end
 
+local function openUiInputLock()
+	InputModeController.setUiLock("external", true)
+end
+
+local function closeUiInputLock()
+	if player:GetAttribute("InventoryVisible") == true then
+		return
+	end
+
+	InputModeController.setUiLock("external", false)
+end
+
 local function requestEquipSlot(slot: string)
 	if PlaceConfig.isLobbyPlace() then
 		sendAction({ kind = "EquipSlot", slot = slot })
@@ -152,6 +79,9 @@ local function requestEquipSlot(slot: string)
 	end
 
 	if player:GetAttribute("InventoryVisible") == true then
+		return
+	end
+	if player:GetAttribute("RaidMenuOpen") == true then
 		return
 	end
 
@@ -166,6 +96,9 @@ local function requestReload()
 	if player:GetAttribute("InventoryVisible") == true then
 		return
 	end
+	if player:GetAttribute("RaidMenuOpen") == true then
+		return
+	end
 
 	sendAction({ kind = "Reload" })
 end
@@ -178,6 +111,9 @@ local function requestCheckMag()
 	if player:GetAttribute("InventoryVisible") == true then
 		return
 	end
+	if player:GetAttribute("RaidMenuOpen") == true then
+		return
+	end
 
 	sendAction({ kind = "CheckMag" })
 end
@@ -188,6 +124,9 @@ local function requestFire()
 	end
 
 	if player:GetAttribute("InventoryVisible") == true then
+		return
+	end
+	if player:GetAttribute("RaidMenuOpen") == true then
 		return
 	end
 
@@ -228,6 +167,8 @@ local slotByKey = {
 ClientActionBridge.register("toggle_inventory", toggleInventory)
 ClientActionBridge.register("open_inventory", openInventory)
 ClientActionBridge.register("close_inventory", closeInventory)
+ClientActionBridge.register("open_ui_input_lock", openUiInputLock)
+ClientActionBridge.register("close_ui_input_lock", closeUiInputLock)
 ClientActionBridge.register("reload", requestReload)
 ClientActionBridge.register("check_mag", requestCheckMag)
 ClientActionBridge.register("fire", requestFire)

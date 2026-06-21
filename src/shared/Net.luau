@@ -11,6 +11,7 @@ return {
 	ExtractRequestStartEventName = "ExtractRequestStart",
 	RaidStateEventName = "RaidState",
 	RaidReadyRequestEventName = "RaidReadyRequest",
+	RaidLeaveRequestEventName = "RaidLeaveRequest",
 	BodyLootOpenRequestEventName = "BodyLootOpenRequest",
 	BodyLootCloseRequestEventName = "BodyLootCloseRequest",
 	BodyLootTransferRequestEventName = "BodyLootTransferRequest",

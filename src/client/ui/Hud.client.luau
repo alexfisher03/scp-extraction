@@ -13,6 +13,7 @@ local Net = require(ReplicatedStorage.Shared.Net)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
 local InventoryGrid = require(ReplicatedStorage.Shared.InventoryGrid)
 local ClientActionBridge = require(script.Parent.Parent.state.ClientActionBridge)
+local InputModeController = require(script.Parent.Parent.state.InputModeController)
 local InventoryStore = require(script.Parent.Parent.state.InventoryStore)
 local LootPromptStore = require(script.Parent.Parent.state.LootPromptStore)
 local RaidStore = require(script.Parent.Parent.state.RaidStore)
@@ -27,6 +28,7 @@ local remotes = ReplicatedStorage:WaitForChild(Net.RemotesFolderName)
 local moveItemEvent = remotes:WaitForChild(Net.MoveItemRequestEventName) :: RemoteEvent
 local dropItemEvent = remotes:WaitForChild(Net.DropItemRequestEventName) :: RemoteEvent
 local itemActionEvent = remotes:WaitForChild(Net.ItemActionRequestEventName) :: RemoteEvent
+local raidLeaveRequestEvent = remotes:WaitForChild(Net.RaidLeaveRequestEventName) :: RemoteEvent
 local bodyLootCloseEvent = remotes:WaitForChild(Net.BodyLootCloseRequestEventName) :: RemoteEvent
 local bodyLootTransferEvent = remotes:WaitForChild(Net.BodyLootTransferRequestEventName) :: RemoteEvent
 local stashActionEvent = remotes:FindFirstChild(Net.LobbyStashActionEventName) :: RemoteEvent?
@@ -36,6 +38,7 @@ type DragState = {
 	fromContainer: string,
 	sourceKind: string,
 	bodyId: string?,
+	startedAt: number?,
 }
 
 type HoverState = {
@@ -48,6 +51,15 @@ type SelectedItemSource = {
 	containerName: string,
 	bodyId: string?,
 }
+
+local function applyRaidMenuInputMode(open: boolean)
+	if not PlaceConfig.isRaidPlace() then
+		return
+	end
+
+	player:SetAttribute("RaidMenuOpen", open)
+	InputModeController.setUiLock("raid_menu", open)
+end
 
 local function useHumanoidHealth()
 	local health, setHealth = React.useState(100)
@@ -645,13 +657,13 @@ local function mobileRoundButton(text: string, position: UDim2, diameter: number
 		AnchorPoint = anchorPoint or Vector2.new(1, 1),
 		Position = position,
 		Size = UDim2.fromOffset(diameter, diameter),
-		BackgroundColor3 = Color3.fromRGB(12, 14, 18),
-		BackgroundTransparency = 0.24,
+		BackgroundColor3 = Color3.fromRGB(58, 64, 76),
+		BackgroundTransparency = 0.4,
 		BorderSizePixel = 0,
 		Text = text,
 		Font = Enum.Font.GothamBold,
 		TextSize = if diameter <= 58 then 12 else 14,
-		TextColor3 = Color3.fromRGB(255, 225, 130),
+		TextColor3 = Color3.fromRGB(255, 236, 156),
 		AutoButtonColor = true,
 		ZIndex = 40,
 		[React.Event.Activated] = onActivated,
@@ -660,14 +672,14 @@ local function mobileRoundButton(text: string, position: UDim2, diameter: number
 		Fill = React.createElement("UIGradient", {
 			Rotation = 90,
 			Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromRGB(36, 40, 50)),
-				ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 14, 18)),
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(92, 100, 118)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(44, 50, 62)),
 			}),
 		}),
 		Stroke = React.createElement("UIStroke", {
 			Thickness = 1,
-			Transparency = 0.16,
-			Color = Color3.fromRGB(255, 225, 130),
+			Transparency = 0.08,
+			Color = Color3.fromRGB(255, 236, 156),
 		}),
 	})
 end
@@ -1065,6 +1077,23 @@ local function containerCard(
 						setHoverState(nil)
 					end
 				end,
+				[React.Event.MouseButton1Down] = function()
+					if compact or allowDrag == false or isMobile then
+						return
+					end
+
+					setDragState({
+						itemId = itemId,
+						fromContainer = containerName,
+						sourceKind = "player",
+						bodyId = nil,
+						startedAt = os.clock(),
+					})
+					setHoverState({
+						toContainer = containerName,
+						toIndex = ((packed.y - 1) * columns) + packed.x,
+					})
+				end,
 				[React.Event.Activated] = function()
 					if dragState and allowDrag ~= false and moveDraggedItemToCell then
 						if dragState.itemId == itemId and activateGridItem then
@@ -1084,6 +1113,7 @@ local function containerCard(
 							fromContainer = containerName,
 							sourceKind = "player",
 							bodyId = nil,
+							startedAt = os.clock(),
 						})
 						setHoverState({
 							toContainer = containerName,
@@ -1772,6 +1802,7 @@ local function HudApp()
 	local menuOpen, setMenuOpen = React.useState(false)
 	local menuPosition, setMenuPosition = React.useState(UDim2.fromOffset(0, 0))
 	local extractsVisible, setExtractsVisible = React.useState(false)
+	local escapeMenuOpen, setEscapeMenuOpen = React.useState(false)
 	local mobileUtilityOpen, setMobileUtilityOpen = React.useState(false)
 	local mobileInventoryPage, setMobileInventoryPage = React.useState(1)
 	local isWaitingForPlayers = raidState ~= nil and raidState.phase == "WaitingForPlayers"
@@ -1820,9 +1851,15 @@ local function HudApp()
 			return
 		end
 
-		if isLobbyStashView and not isMobile then
+		if isLobbyStashView then
 			if dragState.fromContainer == "stash" then
-				if toContainer == "rig" or toContainer == "backpack" then
+				if toContainer == "stash" then
+					sendLobbyStashActionRequest({
+						kind = "MoveWithinStash",
+						itemId = dragState.itemId,
+						destIndex = toIndex,
+					})
+				elseif toContainer == "rig" or toContainer == "backpack" then
 					sendLobbyStashActionRequest({
 						kind = "MoveToInventory",
 						itemId = dragState.itemId,
@@ -1855,6 +1892,8 @@ local function HudApp()
 	end
 
 	local openContextMenuForItem: (string, string, string, string?) -> () = function() end
+	local closeInventoryPanel: () -> () = function() end
+	local toggleRaidMenuFromInput: (boolean?) -> () = function() end
 
 	local function activateGridItem(itemId: string, containerName: string)
 		if isLobbyStashView and not isMobile then
@@ -1909,6 +1948,7 @@ local function HudApp()
 				fromContainer = containerName,
 				sourceKind = "player",
 				bodyId = nil,
+				startedAt = os.clock(),
 			})
 			setHoverState({
 				toContainer = containerName,
@@ -1923,6 +1963,7 @@ local function HudApp()
 				fromContainer = containerName,
 				sourceKind = "player",
 				bodyId = nil,
+				startedAt = os.clock(),
 			})
 			setHoverState({
 				toContainer = containerName,
@@ -1942,6 +1983,10 @@ local function HudApp()
 
 		local conn = UserInputService.InputEnded:Connect(function(input)
 			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+				return
+			end
+
+			if dragState.startedAt and (os.clock() - dragState.startedAt) < 0.08 then
 				return
 			end
 
@@ -1987,17 +2032,37 @@ local function HudApp()
 	React.useEffect(function()
 		if inventoryVisible or isRaidLoading or isWaitingForPlayers then
 			setMobileUtilityOpen(false)
+			setEscapeMenuOpen(false)
 		end
 	end, { inventoryVisible, isRaidLoading, isWaitingForPlayers })
 
 	React.useEffect(function()
-		local conn = UserInputService.InputBegan:Connect(function(input, processed)
-			if UserInputService:GetFocusedTextBox() then
-				return
-			end
+		if isLeavingRaid then
+			setEscapeMenuOpen(false)
+		end
+	end, { isLeavingRaid })
 
-			if bodyLootSnapshot and input.KeyCode == Enum.KeyCode.Escape then
-				sendBodyLootCloseRequest()
+	React.useEffect(function()
+		if not isRaidPlace then
+			return
+		end
+
+		if escapeMenuOpen then
+			applyRaidMenuInputMode(true)
+		elseif not inventoryVisible and not bodyLootSnapshot then
+			applyRaidMenuInputMode(false)
+		end
+
+		return function()
+			if escapeMenuOpen and not inventoryVisible and not bodyLootSnapshot then
+				applyRaidMenuInputMode(false)
+			end
+		end
+	end, { escapeMenuOpen, isRaidPlace, inventoryVisible, bodyLootSnapshot })
+
+	React.useEffect(function()
+		local conn = UserInputService.InputBegan:Connect(function(input, _processed)
+			if UserInputService:GetFocusedTextBox() then
 				return
 			end
 
@@ -2005,6 +2070,10 @@ local function HudApp()
 				setExtractsVisible(function(previous)
 					return not previous
 				end)
+			end
+
+			if input.KeyCode == Enum.KeyCode.M and isRaidPlace then
+				toggleRaidMenuFromInput(inventoryVisible)
 			end
 
 			if input.KeyCode == Enum.KeyCode.R and inventoryVisible and selectedItemId and selectedItemSource then
@@ -2029,7 +2098,7 @@ local function HudApp()
 		return function()
 			conn:Disconnect()
 		end
-	end, { inventoryVisible, selectedItemId, selectedItemSource, isLobbyStashView })
+	end, { inventoryVisible, selectedItemId, selectedItemSource, isLobbyStashView, isRaidPlace, bodyLootSnapshot, isRaidLoading, isWaitingForPlayers, isLeavingRaid })
 
 	openContextMenuForItem = function(itemId: string, sourceKind: string, containerName: string, bodyId: string?)
 		local localX: number
@@ -2064,7 +2133,7 @@ local function HudApp()
 		setSelectedItemSource(nil)
 	end
 
-	local function closeInventoryPanel()
+	closeInventoryPanel = function()
 		closeContextMenu()
 		setDragState(nil)
 		setHoverState(nil)
@@ -2076,6 +2145,35 @@ local function HudApp()
 			end
 		else
 			ClientActionBridge.invoke("close_inventory")
+		end
+	end
+
+	toggleRaidMenuFromInput = function(forceOpen: boolean?)
+		if not isRaidPlace then
+			return
+		end
+
+		if bodyLootSnapshot then
+			sendBodyLootCloseRequest()
+			return
+		end
+
+		if inventoryVisible then
+			closeInventoryPanel()
+			if forceOpen == true then
+				setEscapeMenuOpen(true)
+			end
+			return
+		end
+
+		if not isRaidLoading and not isWaitingForPlayers and not isLeavingRaid then
+			if forceOpen == true then
+				setEscapeMenuOpen(true)
+			else
+				setEscapeMenuOpen(function(previous)
+					return not previous
+				end)
+			end
 		end
 	end
 
@@ -2197,6 +2295,34 @@ local function HudApp()
 
 	local menuActions = {}
 	if selectedItemId and selectedItemSource and selectedMenuItem then
+		if isMobile and dragState then
+			table.insert(menuActions, {
+				label = "Cancel Move",
+				run = function()
+					setDragState(nil)
+					setHoverState(nil)
+					closeContextMenu()
+				end,
+			})
+		end
+
+		if isMobile and selectedItemSource.sourceKind == "player" and not isWeaponSlotContainer(selectedItemSource.containerName) then
+			table.insert(menuActions, {
+				label = "Move",
+				run = function()
+					setDragState({
+						itemId = selectedItemId,
+						fromContainer = selectedItemSource.containerName,
+						sourceKind = "player",
+						bodyId = nil,
+						startedAt = os.clock(),
+					})
+					setHoverState(nil)
+					closeContextMenu()
+				end,
+			})
+		end
+
 		if selectedItemSource.sourceKind == "player" and not isWeaponSlotContainer(selectedItemSource.containerName) then
 			table.insert(menuActions, {
 				label = "Rotate",
@@ -2414,6 +2540,13 @@ local function HudApp()
 				})
 			end
 		end
+
+		table.insert(menuActions, {
+			label = "Close",
+			run = function()
+				closeContextMenu()
+			end,
+		})
 	end
 	local contextMenuChildren: {[string]: any} = {
 		Layout = React.createElement("UIListLayout", {
@@ -2494,6 +2627,7 @@ local function HudApp()
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextColor3 = Color3.fromRGB(255, 210, 120),
 		})
+
 		if shouldShowRaidTimer then
 			local timerUrgent = raidTimerRemaining ~= nil and raidTimerRemaining <= 180
 			rootChildren.RaidTimerButton = React.createElement("TextButton", {
@@ -2695,7 +2829,7 @@ local function HudApp()
 			}),
 			Title = React.createElement("TextLabel", {
 				Position = UDim2.fromOffset(16, 10),
-				Size = UDim2.new(1, if isMobile then -88 else -32, 0, 24),
+				Size = UDim2.new(1, if isRaidPlace and not bodyLootSnapshot then -168 else if isMobile then -88 else -56, 0, 24),
 				BackgroundTransparency = 1,
 				Text = inventoryTitleText,
 				Font = Enum.Font.GothamBold,
@@ -2703,6 +2837,29 @@ local function HudApp()
 				TextXAlignment = Enum.TextXAlignment.Left,
 				TextColor3 = Color3.fromRGB(255, 225, 130),
 			}),
+			RaidMenuButton = if isRaidPlace and not bodyLootSnapshot and not isRaidLoading and not isWaitingForPlayers and not isLeavingRaid then React.createElement("TextButton", {
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -52, 0, 10),
+				Size = UDim2.fromOffset(if isMobile then 66 else 74, 30),
+				BackgroundColor3 = Color3.fromRGB(28, 28, 28),
+				BackgroundTransparency = 0.08,
+				BorderSizePixel = 0,
+				Text = if isMobile then "Menu" else "Menu M",
+				Font = Enum.Font.GothamBold,
+				TextSize = if isMobile then 13 else 12,
+				TextColor3 = Color3.fromRGB(255, 225, 130),
+				[React.Event.Activated] = function()
+					closeInventoryPanel()
+					setEscapeMenuOpen(true)
+				end,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Stroke = React.createElement("UIStroke", {
+					Thickness = 1,
+					Transparency = 0.12,
+					Color = Color3.fromRGB(255, 225, 130),
+				}),
+			}) else nil,
 			CloseButton = React.createElement("TextButton", {
 				AnchorPoint = Vector2.new(1, 0),
 				Position = UDim2.new(1, -14, 0, 10),
@@ -2856,7 +3013,7 @@ local function HudApp()
 				activateGridItem,
 				activeDragItem,
 				isMobile,
-				not isMobile,
+				(not isMobile) or dragState ~= nil,
 				"grid"
 			) else nil,
 			Backpack = if not isMobile or (not isLobbyStashView and currentMobilePageId == "backpack") then containerCard(
@@ -2887,7 +3044,7 @@ local function HudApp()
 				activateGridItem,
 				activeDragItem,
 				isMobile,
-				not isMobile,
+				(not isMobile) or dragState ~= nil,
 				"grid"
 			) else nil,
 			Stash = if isLobbyStashView and (not isMobile or currentMobilePageId == "stash") then containerCard(
@@ -2906,7 +3063,7 @@ local function HudApp()
 				activateGridItem,
 				activeDragItem,
 				isMobile,
-				not isMobile,
+				(not isMobile) or dragState ~= nil,
 				"grid"
 			) else nil,
 			BodyLoot = if bodyLootSnapshot and (not isMobile or currentMobilePageId == "body") then bodyContainerCard(
@@ -3007,6 +3164,17 @@ local function HudApp()
 				end,
 				Vector2.new(0, 1)
 			)
+
+			rootChildren.MobileRaidMenuButton = mobileActionButton(
+				"Raid Menu",
+				UDim2.new(0, 16, 1, -220),
+				UDim2.fromOffset(104, 36),
+				function()
+					setMobileUtilityOpen(false)
+					toggleRaidMenuFromInput()
+				end,
+				Vector2.new(0, 1)
+			)
 		end
 	end
 
@@ -3047,6 +3215,113 @@ local function HudApp()
 			end
 		)
 
+	end
+
+	if escapeMenuOpen and isRaidPlace and not inventoryVisible and not isRaidLoading and not isWaitingForPlayers and not isLeavingRaid then
+		rootChildren.RaidMenuModalCapture = React.createElement("TextButton", {
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Text = "",
+			AutoButtonColor = false,
+			Modal = true,
+			Selectable = false,
+			ZIndex = 49,
+		})
+
+		rootChildren.EscapeMenu = React.createElement("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(if isMobile then math.min(300, viewportSize.X - 32) else 360, if isMobile then 246 else 260),
+			BackgroundColor3 = Color3.fromRGB(12, 12, 12),
+			BackgroundTransparency = 0.04,
+			BorderSizePixel = 0,
+			ZIndex = 50,
+		}, {
+			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 10) }),
+			Stroke = React.createElement("UIStroke", {
+				Thickness = 1,
+				Transparency = 0.1,
+				Color = Color3.fromRGB(255, 225, 130),
+			}),
+			Title = React.createElement("TextLabel", {
+				Position = UDim2.fromOffset(18, 16),
+				Size = UDim2.new(1, -36, 0, 24),
+				BackgroundTransparency = 1,
+				Text = "RAID MENU",
+				Font = Enum.Font.GothamBold,
+				TextSize = 18,
+				TextColor3 = Color3.fromRGB(255, 225, 130),
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 51,
+			}),
+			Warning = React.createElement("TextLabel", {
+				Position = UDim2.fromOffset(18, 46),
+				Size = UDim2.new(1, -36, 0, 42),
+				BackgroundTransparency = 1,
+				Text = "Leaving the raid counts as KIA. Your carried gear will be lost.",
+				Font = Enum.Font.Gotham,
+				TextSize = if isMobile then 12 else 13,
+				TextWrapped = true,
+				TextColor3 = Color3.fromRGB(205, 205, 205),
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextYAlignment = Enum.TextYAlignment.Top,
+				ZIndex = 51,
+			}),
+			Resume = React.createElement("TextButton", {
+				Position = UDim2.fromOffset(18, 102),
+				Size = UDim2.new(1, -36, 0, 38),
+				BackgroundColor3 = Color3.fromRGB(34, 34, 34),
+				BorderSizePixel = 0,
+				Text = "Resume",
+				Font = Enum.Font.GothamBold,
+				TextSize = 14,
+				TextColor3 = Color3.new(1, 1, 1),
+				ZIndex = 51,
+				[React.Event.Activated] = function()
+					setEscapeMenuOpen(false)
+				end,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			}),
+			Settings = React.createElement("TextButton", {
+				Position = UDim2.fromOffset(18, 148),
+				Size = UDim2.new(1, -36, 0, 38),
+				BackgroundColor3 = Color3.fromRGB(28, 28, 28),
+				BorderSizePixel = 0,
+				Text = "Settings (soon)",
+				Font = Enum.Font.GothamBold,
+				TextSize = 14,
+				TextColor3 = Color3.fromRGB(180, 180, 180),
+				ZIndex = 51,
+				AutoButtonColor = false,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+			}),
+			LeaveRaid = React.createElement("TextButton", {
+				Position = UDim2.fromOffset(18, 194),
+				Size = UDim2.new(1, -36, 0, 42),
+				BackgroundColor3 = Color3.fromRGB(74, 28, 24),
+				BorderSizePixel = 0,
+				Text = "Leave Raid - Lose Gear",
+				Font = Enum.Font.GothamBold,
+				TextSize = 14,
+				TextColor3 = Color3.fromRGB(255, 235, 220),
+				ZIndex = 51,
+				[React.Event.Activated] = function()
+					setEscapeMenuOpen(false)
+					raidLeaveRequestEvent:FireServer()
+				end,
+			}, {
+				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
+				Stroke = React.createElement("UIStroke", {
+					Thickness = 1,
+					Transparency = 0.25,
+					Color = Color3.fromRGB(255, 110, 90),
+				}),
+			}),
+		})
 	end
 
 	if isWaitingForPlayers then

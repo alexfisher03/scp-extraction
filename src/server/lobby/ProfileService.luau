@@ -32,6 +32,18 @@ type CachedProfile = {
 
 local profiles: {[number]: CachedProfile} = {}
 local preRaidProfileSnapshotsByUserId: {[number]: any} = {}
+local pruneUnreferencedItems
+
+local function clearCarriedLoadout(profile: any)
+	profile.activeRaid = nil
+	profile.loadout.primaryA = nil
+	profile.loadout.primaryB = nil
+	profile.loadout.pistol = nil
+	profile.loadout.melee = nil
+	profile.loadout.rig = {}
+	profile.loadout.backpack = {}
+	profile.loadout.secure = {}
+end
 
 local function deepClone(value: any): any
 	if typeof(value) ~= "table" then
@@ -219,11 +231,12 @@ function ProfileService.restoreProfileSnapshot(userId: number, profileSnapshot: 
 	cached.dirty = true
 end
 
-function ProfileService.markActiveRaid(userId: number, raidId: string)
+function ProfileService.markActiveRaid(userId: number, raidId: string, preRaidProfileSnapshot: any?)
 	local profile = ProfileService.loadProfile(userId)
 	profile.activeRaid = {
 		raidId = raidId,
 		startedAt = Workspace:GetServerTimeNow(),
+		preRaidProfileSnapshot = if preRaidProfileSnapshot ~= nil then deepClone(preRaidProfileSnapshot) else nil,
 	}
 	local cached = getCache(userId)
 	cached.profile = profile
@@ -249,13 +262,25 @@ function ProfileService.consumeAbandonedRaid(userId: number): any?
 	end
 
 	local abandonedRaid = deepClone(profile.activeRaid)
-	profile.activeRaid = nil
+	clearCarriedLoadout(profile)
+	pruneUnreferencedItems(profile)
 	local cached = getCache(userId)
 	cached.profile = profile
 	cached.loaded = true
 	cached.dirty = true
 	ProfileService.forceSave(userId, "abandoned_raid_loss")
 	return abandonedRaid
+end
+
+function ProfileService.applyRaidLossSnapshot(userId: number, _preRaidProfileSnapshot: any?)
+	local profile = ProfileService.loadProfile(userId)
+	clearCarriedLoadout(profile)
+	pruneUnreferencedItems(profile)
+
+	local cached = getCache(userId)
+	cached.profile = profile
+	cached.loaded = true
+	cached.dirty = true
 end
 
 function ProfileService.buildRaidInventorySnapshot(userId: number): any
@@ -347,7 +372,7 @@ local function collectReferencedItemIds(profile: any): {[string]: boolean}
 	return referenced
 end
 
-local function pruneUnreferencedItems(profile: any)
+function pruneUnreferencedItems(profile: any)
 	local referenced = collectReferencedItemIds(profile)
 	for itemId in pairs(profile.items) do
 		if not referenced[itemId] then
@@ -700,6 +725,34 @@ function ProfileService.handleStashAction(userId: number, action: any): (boolean
 		end
 
 		profile.loadout[destination] = itemId
+		ProfileService.scheduleSave(userId, "stash_move")
+		return true, nil
+	end
+
+	if kind == "MoveWithinStash" then
+		local itemId = action.itemId
+		local destIndex = if typeof(action.destIndex) == "number" then action.destIndex else nil
+		if typeof(itemId) ~= "string" then
+			return false, "invalid_item"
+		end
+
+		local stashIndex = findItemInList(profile.stash, itemId, profile.stashCapacity)
+		if not stashIndex then
+			return false, "item_not_in_stash"
+		end
+
+		local item = profile.items[itemId]
+		if typeof(item) ~= "table" then
+			return false, "missing_item"
+		end
+
+		local destinationIndex = InventoryGrid.placeItem(profile.stash, profile.items, profile.stashCapacity, "stash", item, destIndex, itemId)
+		if not destinationIndex then
+			return false, "stash_full"
+		end
+
+		profile.stash[stashIndex] = nil
+		profile.stash[destinationIndex] = itemId
 		ProfileService.scheduleSave(userId, "stash_move")
 		return true, nil
 	end

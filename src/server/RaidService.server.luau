@@ -21,6 +21,7 @@ local remotes = ReplicatedStorage:WaitForChild(Net.RemotesFolderName)
 local extractRequestEvent = remotes:WaitForChild(Net.ExtractRequestStartEventName) :: RemoteEvent
 local raidStateEvent = remotes:WaitForChild(Net.RaidStateEventName) :: RemoteEvent
 local raidReadyRequestEvent = remotes:WaitForChild(Net.RaidReadyRequestEventName) :: RemoteEvent
+local raidLeaveRequestEvent = remotes:WaitForChild(Net.RaidLeaveRequestEventName) :: RemoteEvent
 local bodyLootOpenEvent = remotes:WaitForChild(Net.BodyLootOpenRequestEventName) :: RemoteEvent
 local bodyLootCloseEvent = remotes:WaitForChild(Net.BodyLootCloseRequestEventName) :: RemoteEvent
 local bodyLootTransferEvent = remotes:WaitForChild(Net.BodyLootTransferRequestEventName) :: RemoteEvent
@@ -1061,7 +1062,7 @@ local function handleRaidReady(player: Player)
 	refreshRaidStatesForAllPlayers()
 end
 
-local function handleCharacterDied(player: Player, character: Model)
+local function endPlayerAsKia(player: Player, character: Model?, reason: string)
 	local raidState = RaidAuthority.getOrCreateState(player.UserId)
 	if endedPlayersByUserId[player.UserId] then
 		return
@@ -1069,14 +1070,8 @@ local function handleCharacterDied(player: Player, character: Model)
 
 	local root = getRoot(character)
 	local inventoryState = InventoryAuthority.getState(player.UserId)
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	local attackerUserId = humanoid and humanoid:GetAttribute("LastDamagedByUserId") or nil
-	if typeof(attackerUserId) == "number" and attackerUserId ~= player.UserId then
-		awardKill(attackerUserId, player)
-	end
-
 	if not root or not inventoryState then
-		endRaidForPlayer(player, RaidResult.Status.KIA, nil, "Killed in raid")
+		endRaidForPlayer(player, RaidResult.Status.KIA, nil, reason)
 		return
 	end
 
@@ -1088,7 +1083,17 @@ local function handleCharacterDied(player: Player, character: Model)
 	clearInventoryForLoss(inventoryState)
 	InventoryAuthority.emitSnapshot(player, inventoryState)
 	closeBodyLoot(player, raidState)
-	endRaidForPlayer(player, RaidResult.Status.KIA, nil, "Killed in raid")
+	endRaidForPlayer(player, RaidResult.Status.KIA, nil, reason)
+end
+
+local function handleCharacterDied(player: Player, character: Model)
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local attackerUserId = humanoid and humanoid:GetAttribute("LastDamagedByUserId") or nil
+	if typeof(attackerUserId) == "number" and attackerUserId ~= player.UserId then
+		awardKill(attackerUserId, player)
+	end
+
+	endPlayerAsKia(player, character, "Killed in raid")
 end
 
 local function handlePlayerLeavingRaid(player: Player)
@@ -1236,6 +1241,15 @@ bodyLootTransferEvent.OnServerEvent:Connect(function(player: Player, bodyId: any
 	end
 
 	handleBodyTransfer(player, bodyId, itemId, toContainerName, toIndex)
+end)
+
+raidLeaveRequestEvent.OnServerEvent:Connect(function(player: Player)
+	local raidState = RaidAuthority.getState(player.UserId)
+	if not raidState or raidState.phase == "LeavingRaid" then
+		return
+	end
+
+	endPlayerAsKia(player, player.Character, "Left raid")
 end)
 
 for _, player in ipairs(Players:GetPlayers()) do

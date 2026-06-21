@@ -27,6 +27,7 @@ local function resetGameplayInputMode()
 	if player:GetAttribute("LobbyPostRaidOpen") == true
 		or player:GetAttribute("LobbyTerminalOpen") == true
 		or player:GetAttribute("InventoryVisible") == true
+		or player:GetAttribute("RaidMenuOpen") == true
 	then
 		return
 	end
@@ -71,6 +72,7 @@ pcall(function()
 end)
 
 player:SetAttribute("InventoryVisible", false)
+player:SetAttribute("RaidMenuOpen", false)
 player:SetAttribute("RaidPhase", "InRaid")
 player:SetAttribute("PlayerCanFight", true)
 player:SetAttribute("BodyLootOpen", false)
