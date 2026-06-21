@@ -12,6 +12,7 @@ local ReactRoblox = require(Packages:WaitForChild("ReactRoblox"))
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
+local UiAssets = require(ReplicatedStorage.Shared.UiAssets)
 
 if not PlaceConfig.isLobbyPlace() then
 	return
@@ -123,6 +124,40 @@ local function decodeEliminations(rawValue: any): {string}
 	end
 
 	return {}
+end
+
+local function staticBackdrop(imageId: string, zIndex: number)
+	if imageId ~= "" then
+		return React.createElement("ImageLabel", {
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 0,
+			BorderSizePixel = 0,
+			Image = imageId,
+			ImageTransparency = 0,
+			ScaleType = Enum.ScaleType.Crop,
+			ZIndex = zIndex,
+		}, {
+			Vignette = React.createElement("Frame", {
+				Position = UDim2.fromOffset(0, 0),
+				Size = UDim2.fromScale(1, 1),
+				BackgroundColor3 = Color3.new(0, 0, 0),
+				BackgroundTransparency = 0.28,
+				BorderSizePixel = 0,
+				ZIndex = zIndex + 1,
+			}),
+		})
+	end
+
+	return React.createElement("Frame", {
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0,
+		BorderSizePixel = 0,
+		ZIndex = zIndex,
+	})
 end
 
 local function usePostRaidState()
@@ -250,14 +285,9 @@ local function PostRaidApp()
 	return React.createElement("ScreenGui", {
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	}, {
-		Scrim = React.createElement("Frame", {
-			Position = UDim2.fromOffset(0, 0),
-			Size = UDim2.fromScale(1, 1),
-			BackgroundColor3 = Color3.new(0, 0, 0),
-			BackgroundTransparency = 0.55,
-			BorderSizePixel = 0,
-		}),
+		Backdrop = staticBackdrop(UiAssets.POST_RAID_BACKDROP_IMAGE, 1),
 		Panel = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
@@ -265,6 +295,7 @@ local function PostRaidApp()
 			BackgroundColor3 = Color3.fromRGB(12, 12, 12),
 			BackgroundTransparency = 0.06,
 			BorderSizePixel = 0,
+			ZIndex = 5,
 		}, {
 			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(0, 12) }),
 			Stroke = React.createElement("UIStroke", {

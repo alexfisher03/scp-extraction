@@ -11,6 +11,7 @@ local ReactRoblox = require(Packages:WaitForChild("ReactRoblox"))
 
 local Net = require(ReplicatedStorage.Shared.Net)
 local PlaceConfig = require(ReplicatedStorage.Shared.PlaceConfig)
+local UiAssets = require(ReplicatedStorage.Shared.UiAssets)
 local InventoryGrid = require(ReplicatedStorage.Shared.InventoryGrid)
 local ClientActionBridge = require(script.Parent.Parent.state.ClientActionBridge)
 local InputModeController = require(script.Parent.Parent.state.InputModeController)
@@ -371,7 +372,13 @@ local function useRaidLoadingOverlay(raidState: any, snapshot: any)
 			if raidState.phase == "LeavingRaid" then
 				updateStage("Leaving raid...")
 				setChecklist(buildChecklist(8, 8))
-				return false, "Leaving raid...", "Finalizing raid result and returning you to the lobby."
+				return false, "Returning to lobby...", "Securing raid result and transferring you out."
+			end
+
+			if raidState.phase == "Extracting" then
+				updateStage("Extracting...")
+				setChecklist(buildChecklist(8, 7))
+				return false, "Extracting...", "Hold position until extraction completes."
 			end
 
 			if raidState.phase == "WaitingForPlayers" then
@@ -616,6 +623,40 @@ local function loadingStepLabel(text: string, layoutOrder: number, activeMarkerV
 			else Color3.fromRGB(130, 130, 130),
 		TextXAlignment = Enum.TextXAlignment.Center,
 		ZIndex = 51,
+	})
+end
+
+local function staticBackdrop(imageId: string, zIndex: number)
+	if imageId ~= "" then
+		return React.createElement("ImageLabel", {
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 0,
+			BorderSizePixel = 0,
+			Image = imageId,
+			ImageTransparency = 0,
+			ScaleType = Enum.ScaleType.Crop,
+			ZIndex = zIndex,
+		}, {
+			Vignette = React.createElement("Frame", {
+				Position = UDim2.fromOffset(0, 0),
+				Size = UDim2.fromScale(1, 1),
+				BackgroundColor3 = Color3.new(0, 0, 0),
+				BackgroundTransparency = 0.35,
+				BorderSizePixel = 0,
+				ZIndex = zIndex + 1,
+			}),
+		})
+	end
+
+	return React.createElement("Frame", {
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0,
+		BorderSizePixel = 0,
+		ZIndex = zIndex,
 	})
 end
 
@@ -3410,10 +3451,34 @@ local function HudApp()
 			Position = UDim2.fromOffset(0, 0),
 			Size = UDim2.fromScale(1, 1),
 			BackgroundColor3 = Color3.new(0, 0, 0),
-			BackgroundTransparency = if isLeavingRaid then 0 else loadingOverlayTransparency,
+			BackgroundTransparency = if isLeavingRaid then 1 else loadingOverlayTransparency,
 			BorderSizePixel = 0,
 			ZIndex = 50,
 		}, {
+			Backdrop = if isLeavingRaid then staticBackdrop(UiAssets.RAID_END_BACKDROP_IMAGE, 50) else nil,
+			LeavingTitle = if isLeavingRaid then React.createElement("TextLabel", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.50),
+				Size = UDim2.fromOffset(if isMobile then math.min(320, viewportSize.X - 36) else 560, if isMobile then 28 else 34),
+				BackgroundTransparency = 1,
+				Text = "Returning to lobby...",
+				Font = Enum.Font.GothamBlack,
+				TextSize = if isMobile then 19 else 26,
+				TextColor3 = Color3.fromRGB(255, 225, 130),
+				ZIndex = 53,
+			}) else nil,
+			LeavingDetail = if isLeavingRaid then React.createElement("TextLabel", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.56),
+				Size = UDim2.fromOffset(if isMobile then math.min(340, viewportSize.X - 30) else 640, if isMobile then 40 else 28),
+				BackgroundTransparency = 1,
+				Text = "Finalizing raid result and transferring out.",
+				Font = Enum.Font.Gotham,
+				TextSize = if isMobile then 13 else 15,
+				TextWrapped = isMobile,
+				TextColor3 = Color3.fromRGB(210, 210, 210),
+				ZIndex = 53,
+			}) else nil,
 			Label = if not isLeavingRaid then React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, if isMobile then 0.24 else 0.52),
@@ -3475,6 +3540,7 @@ local function HudApp()
 	return React.createElement("ScreenGui", {
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	}, rootChildren)
 end
 
